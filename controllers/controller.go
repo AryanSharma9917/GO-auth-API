@@ -1,6 +1,6 @@
 package controllers
 
-import {
+import (
 	"fmt"
 	"golang-auth/db"
 	"net/http"
@@ -12,7 +12,7 @@ import {
 	"github.com/labstack/echo/v4"
 	"go.mongodb.org/mongo-driver/mongo"
 	"golang.org/x/crypto/bcrypt"
-}
+)
 
 // Used to create a new user
 func CreateUser(client *mongo.Client) echo.HandlerFunc {
@@ -72,4 +72,41 @@ func CreateUser(client *mongo.Client) echo.HandlerFunc {
 
 		return c.JSON(http.StatusUnauthorized, "Not authorized")
 	}
+}
+
+// Used to delete an user
+func DeleteUser(client *mongo.Client) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		username := c.QueryParam("username")
+		//Check if the user exists in the Database
+		dbUser, err := db.FindOne(username, "goapi-auth", "users", client)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		if dbUser == nil {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Please login first")
+		}
+		//Checks if user is admin and perform the rest of the functions
+		if dbUser.IsAdmin {
+			// Parse the incoming data
+			delUsername := c.QueryParam("delUsername")
+
+			//Check if the user to be deleted exists in the Database
+			delUser, err := db.FindOne(delUsername, "goapi-auth", "users", client)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+			if dbUser == nil {
+				return echo.NewHTTPError(http.StatusUnauthorized, "Invalid username or password")
+			}
+
+			if err2 := db.Delete(delUser.Username, client); err2 != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, err2.Error())
+			}
+			return c.JSON(http.StatusOK, "successfully deleted")
+		}
+
+		return c.JSON(http.StatusUnauthorized, "Not authorized")
+	}
+
 }
