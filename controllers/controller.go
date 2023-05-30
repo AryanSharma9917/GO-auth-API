@@ -129,3 +129,49 @@ func GetUsers(client *mongo.Client) echo.HandlerFunc {
 		return c.JSON(http.StatusOK, results)
 	}
 }
+
+// Used to login an user
+func LoginUser(client *mongo.Client) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Parse the incoming data
+		username := c.QueryParam("username")
+		password := c.QueryParam("password")
+
+		// Check if the user exists in the database
+		dbUser, err := db.FindOne(username, "goapi-auth", "users", client)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		if dbUser == nil {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid username or password")
+		}
+
+		// Check if the provided password is correct
+		if err := bcrypt.CompareHashAndPassword([]byte(dbUser.Password), []byte(password)); err != nil {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid username or password")
+		}
+
+		// Generate a JWT token for the authenticated user
+		token, err := jwt.GenerateToken(dbUser.Username, dbUser.IsAdmin)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+
+		newToken := db.Tokens{
+			Token:     token,
+			Username:  username,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			ExpiresAt: time.Now().Add(1 * time.Hour),
+		}
+
+		db.AddToken(newToken, client)
+
+		// Store the JWT token in the response header
+		c.Response().Header().Set("Authorization", "Bearer "+token)
+
+		return c.JSON(http.StatusOK, map[string]string{
+			"token": token,
+		})
+	}
+}
