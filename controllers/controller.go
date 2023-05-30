@@ -175,3 +175,22 @@ func LoginUser(client *mongo.Client) echo.HandlerFunc {
 		})
 	}
 }
+
+// Used to logout an user
+func LogoutUser(client *mongo.Client) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Get the token from the Authorization header
+		tokenString := c.Request().Header.Get("Authorization")
+		if tokenString == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "Missing token in request header")
+		}
+
+		// Revoke the token by adding it to the blacklist
+		err := jwt.RevokeToken(tokenString, client)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke token")
+		}
+
+		return c.JSON(http.StatusOK, "Successfully logged out")
+	}
+}
