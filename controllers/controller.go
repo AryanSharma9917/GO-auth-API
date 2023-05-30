@@ -194,3 +194,46 @@ func LogoutUser(client *mongo.Client) echo.HandlerFunc {
 		return c.JSON(http.StatusOK, "Successfully logged out")
 	}
 }
+
+// Used to refresh the token
+func RefreshToken(client *mongo.Client) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Parse the request body to get the user credentials
+		username := c.QueryParam("username")
+		password := c.QueryParam("password")
+
+		// Check if the user exists in the database
+		dbUser, err := db.FindOne(username, "goapi-auth", "users", client)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		if dbUser == nil {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid username or password")
+		}
+
+		// Check if the provided password is correct
+		if err := bcrypt.CompareHashAndPassword([]byte(dbUser.Password), []byte(password)); err != nil {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid username or password")
+		}
+
+		// Generate a JWT token for the authenticated user
+		token, err := jwt.GenerateToken(dbUser.Username, dbUser.IsAdmin)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+
+		err2 := db.UpdateToken(dbUser.Username, client, token, c)
+		if err2 != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err2.Error())
+		}
+		fmt.Println("new token:")
+		fmt.Println(token)
+
+		// Store the JWT token in the response header
+		c.Response().Header().Set("Authorization", "Bearer "+token)
+
+		return c.JSON(http.StatusOK, map[string]string{
+			"token": token,
+		})
+	}
+}
