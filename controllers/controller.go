@@ -110,3 +110,22 @@ func DeleteUser(client *mongo.Client) echo.HandlerFunc {
 	}
 
 }
+
+// Returns all the users in an organization
+func GetUsers(client *mongo.Client) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		//Checks is the user is present in the db
+		username := c.QueryParam("username")
+		user, err := db.FindOne(username, "goapi-auth", "users", client)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, err.Error())
+		}
+
+		//Find all users within the the same org of the users
+		results, err2 := db.FindAll(client, user.Organization)
+		if err2 != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		return c.JSON(http.StatusOK, results)
+	}
+}
