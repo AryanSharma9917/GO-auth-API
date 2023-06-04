@@ -10,7 +10,6 @@ This is a backend API service in Golang that handles authorization and authentic
 ## Setup
 ### Prerequisites
 
-- Prerequisites
 - Go 1.16 or later
 - MongoDB 4.4 or later
 - Postman or any API development environment
