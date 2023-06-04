@@ -28,6 +28,8 @@ https://www.postman.com/downloads/
 #### Clone the repository
 ```
 $ git clone https://github.com/<username>/<repository>.git
+```
+```
 $ cd <repository>
 ```
 #### Install dependencies
