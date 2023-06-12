@@ -191,7 +191,7 @@ func LogoutUser(client *mongo.Client) echo.HandlerFunc {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke token")
 		}
 
-		return c.JSON(http.StatusOK, "Successfully logged out")
+		return c.JSON(http.StatusOK, "Successfully logged out!")
 	}
 }
 
