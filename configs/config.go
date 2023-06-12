@@ -1,7 +1,7 @@
 package configs
 
 type ConfigDatabase struct {
-	Port                string `yaml:"port" env:"PORT" env-default:"1323"`
+	Port                string `yaml:"port" env:"PORT" env-default:"8080"`
 	Host                string `yaml:"host" env:"HOST" env-default:"localhost"`
 	DatabaseName        string `yaml:"host" env:"DBNAME" env-default:"goapi-auth"`
 	UserCollection      string `yaml:"host" env:"USERCLC" env-default:"users"`
