@@ -83,3 +83,5 @@ I followed REST API conventions for designing the API endpoints and used HTTP me
 -  `POST /delete` - For deleting a user from the organization
     Parameters- `username`, `delUsername`
 
+#### Updates
+
