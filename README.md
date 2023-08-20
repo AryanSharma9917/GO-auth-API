@@ -1,4 +1,4 @@
-# Authorization and Authentication API in Golang
+# (Authorization and Authentication API in Golang)[https://github.com/AryanSharma9917/GO-auth-API/blob/main/docs.md]
 This is a backend API service in Golang that handles authorization and authentication for a web app where users in an organization can sign in and list all other users in their organization. The API follows REST API conventions and covers the following functionalities:
 
 - User Login
