@@ -4,7 +4,7 @@
 
 Declarative way 
 
-[flow chart :)](https://www.figma.com/file/ZUj1oFnZm1c7t6o7G8pe7h/Go-Auth?type=whiteboard&node-id=875%3A1085&t=wUumJ41oNGwluMbZ-1)
+[flow chart](https://www.figma.com/file/ZUj1oFnZm1c7t6o7G8pe7h/Go-Auth?type=whiteboard&node-id=875%3A1085&t=wUumJ41oNGwluMbZ-1) :
 ## namespace 
 ```
 kubectl create ns dev
