@@ -8,7 +8,7 @@ This is a backend API service in Golang that handles authorization and authentic
 - List all Users in their organization
 
 ## Setup
-Commands can be run over [killercoda](https://killercoda.com/playgrounds/scenario/kubernetes) interface.
+Commands can be run over [killercoda](https://killercoda.com/playgrounds/scenario/kubernetes) interface:)
 ### Prerequisites
 
 - Go 1.16 or later
