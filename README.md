@@ -15,7 +15,7 @@ Commands can be run over [killercoda](https://killercoda.com/playgrounds/scenari
 ```
 https://go.dev/doc/install
 ```
-- MongoDB 4.4 or later
+- MongoDB 4.4
 ```
 https://www.mongodb.com/docs/manual/administration/install-community/
 ```
