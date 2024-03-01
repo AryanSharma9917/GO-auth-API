@@ -1,4 +1,4 @@
-name: Go API CI
+name: GO-auth-API CI
 
 on:
   push:
