@@ -11,7 +11,7 @@ This is a backend API service in Golang that handles authorization and authentic
 Commands can be run over [killercoda](https://killercoda.com/playgrounds/scenario/kubernetes) interface
 ### Prerequisites
 
-- Go 1.19 or later
+- Go 1.21 or later
 ```
 https://go.dev/doc/install
 ```
