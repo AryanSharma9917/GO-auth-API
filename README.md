@@ -47,7 +47,7 @@ $ go run main.go
 The API will be available at `http://localhost:<configs.Cfg.Port>`. (Set the value for the Port according to your own requirement.)
 
 
-## Design Decisions
+## Design Decision
 
 #### Framework
 I chose to use the Echo framework for this project due to its simplicity, performance, and ease of use. Echo is a lightweight web framework that provides a minimalistic approach to building web applications and APIs.
