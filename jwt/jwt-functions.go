@@ -21,7 +21,7 @@ func GenerateToken(username string, isAdmin bool) (string, error) {
 	claims["authorized"] = true
 	claims["username"] = username
 	claims["exp"] = expirationTime
-	claims["isAdmin"] = isAdminlink
+	claims["isAdmin"] = isAdmin
 
 	// Generate the JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
