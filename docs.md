@@ -1,4 +1,4 @@
-## Simple pod imperative way
+## Simple pod imperative way for testing purpose only
 
 `kubectl run nginx --image=nginx --port 80 --dry-run=oclient -oyaml`
 
