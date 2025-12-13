@@ -1,88 +1,280 @@
-# [Authorization and Authentication API in Golang](https://github.com/AryanSharma9917/GO-auth-API/blob/main/docs.md)
-This is a backend API service in Golang that handles authorization and authentication for a web app where users in an organization can sign in and list all other users in their organization. The API follows REST API conventions and covers the following functionalities:
+Perfect — below is a **fully rewritten, professional `docs.md`** tailored **specifically** for your `GO-auth-API` project.
+You can **copy–paste this directly** into `docs.md`.
 
-- User Login
-- User Logout
-- Admin User adds a new User account (by providing the username & password)
-- Admin User deletes an existing User account from their organization
-- List all Users in their organization
+---
 
-## Setup
-Commands can be run over [killercoda](https://killercoda.com/playgrounds/scenario/kubernetes) interface.
-### Prerequisites
+# Authorization & Authentication API – Documentation
 
-- Go 1.21 or later ~
+This document provides detailed technical documentation for the **Authorization and Authentication API** built using **Golang**.
+The service is designed to handle **secure authentication**, **role-based authorization**, and **organization-level user management** using RESTful principles.
+
+---
+
+## Overview
+
+The API enables users within an organization to authenticate and interact with other users based on their assigned roles.
+
+### Key Capabilities
+
+* JWT-based authentication
+* Role-based access control (Admin / User)
+* Organization-scoped user isolation
+* Secure user lifecycle management
+* REST-compliant API design
+
+---
+
+## Authentication Model
+
+The API uses **JSON Web Tokens (JWT)** for authentication.
+
+### Token Flow
+
+1. User logs in using valid credentials
+2. Server issues an **access token**
+3. Token is sent via `Authorization: Bearer <token>`
+4. Middleware validates token for protected routes
+5. Token can be refreshed using `/refresh`
+
+---
+
+## Roles & Permissions
+
+| Role  | Permissions                                |
+| ----- | ------------------------------------------ |
+| User  | View users within own organization         |
+| Admin | Create users, delete users, view all users |
+
+> All access is strictly limited to the user’s organization.
+
+---
+
+## API Endpoints
+
+### Public Routes (No Authentication Required)
+
+#### `POST /login`
+
+Authenticate a user and generate a JWT.
+
+**Request Body**
+
+```json
+{
+  "username": "string",
+  "password": "string"
+}
 ```
-https://go.dev/doc/install
+
+**Response**
+
+```json
+{
+  "token": "jwt_token",
+  "expires_in": "duration"
+}
 ```
-- MongoDB v4.4
+
+---
+
+#### `POST /logout`
+
+Invalidate the current session.
+
+**Request Body**
+
+```json
+{
+  "username": "string"
+}
 ```
-https://www.mongodb.com/docs/manual/administration/install-community/
+
+**Response**
+
+```json
+{
+  "message": "Successfully logged out"
+}
 ```
-- Postman or any API development environment
+
+---
+
+#### `POST /refresh`
+
+Refresh an existing JWT.
+
+**Request Body**
+
+```json
+{
+  "username": "string"
+}
 ```
-https://www.postman.com/downloads/
+
+**Response**
+
+```json
+{
+  "token": "new_jwt_token"
+}
 ```
-### Installation
 
+---
 
-#### Clone the repository
+## Protected Routes
+
+All routes below require a valid JWT in the request header:
+
 ```
-$ git clone https://github.com/<username>/<repository>.git
+Authorization: Bearer <token>
 ```
+
+---
+
+### User Routes
+
+#### `GET /`
+
+Retrieve all users in the same organization.
+
+**Access:** User, Admin
+
+**Response**
+
+```json
+{
+  "users": [
+    {
+      "username": "string",
+      "isAdmin": false,
+      "organization": "string"
+    }
+  ]
+}
 ```
-$ cd <repository>
+
+---
+
+### Admin Routes
+
+#### `POST /add`
+
+Create a new user within the organization.
+
+**Access:** Admin only
+
+**Request Body**
+
+```json
+{
+  "username": "admin_user",
+  "newUsername": "string",
+  "newPassword": "string",
+  "isAdmin": false,
+  "organization": "string"
+}
 ```
-#### Install dependencies
+
+**Response**
+
+```json
+{
+  "message": "User created successfully"
+}
 ```
-$ go mod tidy
+
+---
+
+#### `POST /delete`
+
+Delete an existing user.
+
+**Access:** Admin only
+
+**Request Body**
+
+```json
+{
+  "username": "admin_user",
+  "delUsername": "string"
+}
 ```
-#### Setup environment variables
-- Switch to the `/configs/config.go` and set the values for your desired variables.
 
-#### Run the API
+**Response**
+
+```json
+{
+  "message": "User deleted successfully"
+}
 ```
-$ go run main.go
+
+---
+
+## Error Handling
+
+The API returns standard HTTP status codes:
+
+| Code | Description             |
+| ---- | ----------------------- |
+| 200  | Success                 |
+| 400  | Invalid request payload |
+| 401  | Unauthorized            |
+| 403  | Forbidden               |
+| 404  | Resource not found      |
+| 500  | Internal server error   |
+
+Error responses follow this structure:
+
+```json
+{
+  "error": "error message"
+}
 ```
-The API will be available at `http://localhost:<configs.Cfg.Port>`. (Set the value for the Port according to your own requirement.)
 
+---
 
-## Design Decision
+## Security Measures
 
-#### Framework
-I chose to use the Echo framework for this project due to its simplicity, performance, and ease of use. Echo is a lightweight web framework that provides a minimalistic approach to building web applications and APIs.
+* Passwords are **hashed before storage**
+* JWT verification enforced via middleware
+* Admin privileges checked per route
+* Organization-level access enforced
+* No sensitive data exposed in responses
 
-#### Database
-I chose MongoDB as the database for this project due to its flexibility, scalability, and ease of use. MongoDB is a document-oriented NoSQL database that allows for easy data modeling and flexible data structures.
+---
 
-#### ORM
-I decided not to use an ORM for this project due to the simplicity of the data model and the limited number of database operations required by the API. Instead, I used the official MongoDB driver for Go to interact with the database.
+## Configuration
 
-#### JWT
-For JWT token generation, I used the golang-jwt library, which provides a simple and easy-to-use interface for generating and verifying JWT tokens.
+All application-level configuration is defined in:
 
+```
+configs/config.go
+```
 
-## API Design
+Includes:
 
-I followed REST API conventions for designing the API endpoints and used HTTP methods and status codes to represent the different actions and outcomes of the API requests. I also used middleware to handle authentication and authorization and to enforce input validation and error handling. This API consists of the following routes:
+* Server port
+* MongoDB connection URI
+* JWT secret key
+* Token expiration duration
 
+---
 
-##### Public Routes
+## Future Improvements
 
--  `POST /login` - For logging in an user
-    Paramenters: `username`, `password`
--  `POST /logout` - For logginf out an user
-    Parameters: `username`, `password`
--  `POST /refresh` - For refreshing a token
-    Parameters: `username`, `passowrd`
-##### User Routes
--  `GET /` - For getting all users in an organization
-    Parameters- `username`
-##### Admin Routes
--  `POST /add` - For adding one user to the organization
-    Parameters- `username`, `newUsername`, `newPassword`, `isAdmin`, `organization`
--  `POST /delete` - For deleting a user from the organization
-    Parameters- `username`, `delUsername`
+* Password reset functionality
+* Rate limiting
+* OAuth2 / SSO support
+* Audit logging
+* Swagger / OpenAPI documentation
 
-#### Updates coming soon
+---
 
+## Notes
+
+This API is designed to be:
+
+* Modular
+* Easily extendable
+* Production-ready
+* Cloud-deployment friendly
