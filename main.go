@@ -1,37 +1,54 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"golang-auth/configs"
-	"golang-auth/db"
-	"golang-auth/routes"
-
-	"github.com/ilyakaznacheev/cleanenv"
-	"github.com/labstack/echo/v4"
+	"golang-auth/internal/app"
 )
 
-var e = echo.New()
-
-func init() {
-	//Initialize the cleanenv package
-	err := cleanenv.ReadEnv(&configs.Cfg)
-	fmt.Printf("%v", configs.Cfg)
-	if err != nil {
-		e.Logger.Fatal("Unable to load configuration")
+func main() {
+	if err := run(); err != nil {
+		slog.Error("application stopped", "error", err)
+		os.Exit(1)
 	}
-
-	//Setup database connection
-	cl, err := db.ConnectDB()
-	if err != nil {
-		e.Logger.Fatal("Unable to connect to database")
-	}
-
-	//Set up the routes
-	routes.InitRoutes(e, cl)
 }
 
-func main() {
-	//Start the server
-	e.Logger.Fatal(e.Start(fmt.Sprintf("localhost:%s", configs.Cfg.Port)))
+func run() error {
+	cfg, err := configs.Load()
+	if err != nil {
+		return err
+	}
+
+	application, err := app.New(cfg)
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- application.Start(cfg.Address())
+	}()
+
+	select {
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	defer cancel()
+	return application.Shutdown(shutdownCtx)
 }

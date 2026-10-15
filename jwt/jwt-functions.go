@@ -2,19 +2,18 @@ package jwt
 
 import (
 	"fmt"
-	"golang-auth/configs"
 	"golang-auth/db"
 	"time"
 
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // Used to generate a new token
-func GenerateToken(username string, isAdmin bool) (string, error) {
+func GenerateToken(username string, isAdmin bool, secret string, ttl time.Duration) (string, error) {
 	// Set the expiration time for the token
-	expirationTime := time.Now().Add(1 * time.Hour)
+	expirationTime := time.Now().Add(ttl)
 
 	// Create the JWT claims
 	claims := jwt.MapClaims{}
@@ -25,7 +24,7 @@ func GenerateToken(username string, isAdmin bool) (string, error) {
 
 	// Generate the JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	jwtSecret := []byte(configs.Cfg.JwtSecret)
+	jwtSecret := []byte(secret)
 	signedToken, err := token.SignedString(jwtSecret)
 	if err != nil {
 		return "", err
@@ -35,7 +34,7 @@ func GenerateToken(username string, isAdmin bool) (string, error) {
 }
 
 // Used to refresh a token
-func GenerateRefreshToken(userID string) (string, error) {
+func GenerateRefreshToken(userID string, secret string) (string, error) {
 	// Set the expiration time for the refresh token
 	expirationTime := time.Now().Add(24 * time.Hour)
 
@@ -47,7 +46,7 @@ func GenerateRefreshToken(userID string) (string, error) {
 
 	// Generate the JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	jwtSecret := []byte(configs.Cfg.JwtSecret)
+	jwtSecret := []byte(secret)
 	signedToken, err := token.SignedString(jwtSecret)
 	if err != nil {
 		return "", err
@@ -57,7 +56,7 @@ func GenerateRefreshToken(userID string) (string, error) {
 }
 
 // Used to revoke a token
-func RevokeToken(tokenString string, client *mongo.Client) error {
+func RevokeToken(tokenString string, client *mongo.Client, secret string) error {
 
 	// Parse the token
 	_, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
@@ -73,7 +72,7 @@ func RevokeToken(tokenString string, client *mongo.Client) error {
 
 		fmt.Println(time.Now().In(loc))
 
-		return []byte(configs.Cfg.JwtSecret), nil
+		return []byte(secret), nil
 	})
 	if err != nil {
 		fmt.Println("Error parsing token:", err)

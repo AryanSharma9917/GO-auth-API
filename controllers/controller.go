@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"golang-auth/configs"
 	"golang-auth/db"
 	"net/http"
 	"strconv"
@@ -15,7 +16,7 @@ import (
 )
 
 // Used to create a new user
-func CreateUser(client *mongo.Client) echo.HandlerFunc {
+func CreateUser(client *mongo.Client, cfg configs.Config) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		username := c.QueryParam("username")
 		//Check if the user exists in the Database
@@ -43,7 +44,7 @@ func CreateUser(client *mongo.Client) echo.HandlerFunc {
 			user := db.User{Username: username, Password: string(hashedPassword), IsAdmin: isAdmin, Organization: organization}
 
 			// Generate a JWT token for the authenticated user
-			token, err := jwt.GenerateToken(username, isAdmin)
+			token, err := jwt.GenerateToken(username, isAdmin, cfg.JWTSecret, cfg.AccessTokenTTL)
 			if err != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
@@ -131,7 +132,7 @@ func GetUsers(client *mongo.Client) echo.HandlerFunc {
 }
 
 // Used to login an user
-func LoginUser(client *mongo.Client) echo.HandlerFunc {
+func LoginUser(client *mongo.Client, cfg configs.Config) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		// Parse the incoming data
 		username := c.QueryParam("username")
@@ -152,7 +153,7 @@ func LoginUser(client *mongo.Client) echo.HandlerFunc {
 		}
 
 		// Generate a JWT token for the authenticated user
-		token, err := jwt.GenerateToken(dbUser.Username, dbUser.IsAdmin)
+		token, err := jwt.GenerateToken(dbUser.Username, dbUser.IsAdmin, cfg.JWTSecret, cfg.AccessTokenTTL)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
@@ -177,7 +178,7 @@ func LoginUser(client *mongo.Client) echo.HandlerFunc {
 }
 
 // Used to logout an user
-func LogoutUser(client *mongo.Client) echo.HandlerFunc {
+func LogoutUser(client *mongo.Client, cfg configs.Config) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		// Get the token from the Authorization header
 		tokenString := c.Request().Header.Get("Authorization")
@@ -186,7 +187,7 @@ func LogoutUser(client *mongo.Client) echo.HandlerFunc {
 		}
 
 		// Revoke the token by adding it to the blacklist
-		err := jwt.RevokeToken(tokenString, client)
+		err := jwt.RevokeToken(tokenString, client, cfg.JWTSecret)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke token")
 		}
@@ -196,7 +197,7 @@ func LogoutUser(client *mongo.Client) echo.HandlerFunc {
 }
 
 // Used to refresh the token
-func RefreshToken(client *mongo.Client) echo.HandlerFunc {
+func RefreshToken(client *mongo.Client, cfg configs.Config) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		// Parse the request body to get the user credentials
 		username := c.QueryParam("username")
@@ -217,7 +218,7 @@ func RefreshToken(client *mongo.Client) echo.HandlerFunc {
 		}
 
 		// Generate a JWT token for the authenticated user
-		token, err := jwt.GenerateToken(dbUser.Username, dbUser.IsAdmin)
+		token, err := jwt.GenerateToken(dbUser.Username, dbUser.IsAdmin, cfg.JWTSecret, cfg.AccessTokenTTL)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
