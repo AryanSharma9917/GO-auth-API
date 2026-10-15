@@ -11,9 +11,7 @@ import (
 )
 
 // Used to connect to a database
-func ConnectDB() (*mongo.Client, error) {
-	uri := "mongodb://localhost:27017"
-
+func ConnectDB(uri string) (*mongo.Client, error) {
 	clientOptions := options.Client().ApplyURI(uri)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -30,6 +28,6 @@ func ConnectDB() (*mongo.Client, error) {
 		return nil, err
 	}
 
-	fmt.Println("Connected to MongoDB!")
+	fmt.Println("Connected to MongoDB")
 	return client, nil
 }

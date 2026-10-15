@@ -1,0 +1,21 @@
+# Build output
+/golang-auth
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+
+# Test and coverage output
+/coverage/
+coverage.out
