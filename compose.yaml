@@ -10,6 +10,9 @@ services:
       MONGODB_URI: mongodb://mongo:27017
       MONGODB_DATABASE: goapi-auth
       JWT_SECRET: local-development-secret-change-before-production
+      JWT_ISSUER: go-auth-api
+      JWT_AUDIENCE: go-auth-clients
+      PASSWORD_BCRYPT_COST: 12
     ports:
       - "8080:8080"
     depends_on:

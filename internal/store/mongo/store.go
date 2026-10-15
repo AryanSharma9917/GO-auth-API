@@ -48,13 +48,25 @@ func New(client *mongo.Client, databaseName string, operationTimeout time.Durati
 	}
 }
 
+func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
+	client, err := mongo.Connect(options.Client().ApplyURI(uri))
+	if err != nil {
+		return nil, fmt.Errorf("connect to MongoDB: %w", err)
+	}
+	if err := client.Ping(ctx, nil); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("ping MongoDB: %w", err)
+	}
+	return client, nil
+}
+
 func (s *Store) EnsureIndexes(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, s.operationTimeout)
 	defer cancel()
 
 	indexes := map[string][]mongo.IndexModel{
 		usersCollection: {
-			{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true).SetName("users_email_unique")},
+			{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"email": bson.M{"$type": "string"}}).SetName("users_email_unique")},
 		},
 		organizationsCollection: {
 			{Keys: bson.D{{Key: "slug", Value: 1}}, Options: options.Index().SetUnique(true).SetName("organizations_slug_unique")},
@@ -98,7 +110,7 @@ func (r *UserRepository) Create(ctx context.Context, user domain.User) (domain.U
 		user.ID = bson.NewObjectID()
 	}
 	if _, err := r.collection.InsertOne(ctx, user); err != nil {
-		return domain.User{}, fmt.Errorf("insert user: %w", err)
+		return domain.User{}, repositoryError("insert user", err)
 	}
 	return user, nil
 }
@@ -109,6 +121,10 @@ func (r *UserRepository) ByID(ctx context.Context, id bson.ObjectID) (domain.Use
 
 func (r *UserRepository) ByEmail(ctx context.Context, email string) (domain.User, error) {
 	return r.findOne(ctx, bson.M{"email": email})
+}
+
+func (r *UserRepository) Delete(ctx context.Context, id bson.ObjectID) error {
+	return deleteByID(ctx, r.collection, r.timeout, id, "user")
 }
 
 func (r *UserRepository) findOne(ctx context.Context, filter any) (domain.User, error) {
@@ -133,7 +149,7 @@ func (r *OrganizationRepository) Create(ctx context.Context, organization domain
 		organization.ID = bson.NewObjectID()
 	}
 	if _, err := r.collection.InsertOne(ctx, organization); err != nil {
-		return domain.Organization{}, fmt.Errorf("insert organization: %w", err)
+		return domain.Organization{}, repositoryError("insert organization", err)
 	}
 	return organization, nil
 }
@@ -144,6 +160,10 @@ func (r *OrganizationRepository) ByID(ctx context.Context, id bson.ObjectID) (do
 
 func (r *OrganizationRepository) BySlug(ctx context.Context, slug string) (domain.Organization, error) {
 	return r.findOne(ctx, bson.M{"slug": slug})
+}
+
+func (r *OrganizationRepository) Delete(ctx context.Context, id bson.ObjectID) error {
+	return deleteByID(ctx, r.collection, r.timeout, id, "organization")
 }
 
 func (r *OrganizationRepository) findOne(ctx context.Context, filter any) (domain.Organization, error) {
@@ -168,7 +188,7 @@ func (r *MembershipRepository) Create(ctx context.Context, membership domain.Mem
 		membership.ID = bson.NewObjectID()
 	}
 	if _, err := r.collection.InsertOne(ctx, membership); err != nil {
-		return domain.Membership{}, fmt.Errorf("insert membership: %w", err)
+		return domain.Membership{}, repositoryError("insert membership", err)
 	}
 	return membership, nil
 }
@@ -184,6 +204,10 @@ func (r *MembershipRepository) ByUserAndOrganization(ctx context.Context, userID
 	return membership, nil
 }
 
+func (r *MembershipRepository) Delete(ctx context.Context, id bson.ObjectID) error {
+	return deleteByID(ctx, r.collection, r.timeout, id, "membership")
+}
+
 type SessionRepository struct {
 	collection *mongo.Collection
 	timeout    time.Duration
@@ -196,7 +220,7 @@ func (r *SessionRepository) Create(ctx context.Context, session domain.Session) 
 		session.ID = bson.NewObjectID()
 	}
 	if _, err := r.collection.InsertOne(ctx, session); err != nil {
-		return domain.Session{}, fmt.Errorf("insert session: %w", err)
+		return domain.Session{}, repositoryError("insert session", err)
 	}
 	return session, nil
 }
@@ -223,7 +247,7 @@ func (r *InvitationRepository) Create(ctx context.Context, invitation domain.Inv
 		invitation.ID = bson.NewObjectID()
 	}
 	if _, err := r.collection.InsertOne(ctx, invitation); err != nil {
-		return domain.Invitation{}, fmt.Errorf("insert invitation: %w", err)
+		return domain.Invitation{}, repositoryError("insert invitation", err)
 	}
 	return invitation, nil
 }
@@ -259,7 +283,23 @@ func repositoryError(operation string, err error) error {
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return fmt.Errorf("%s: %w", operation, basestore.ErrNotFound)
 	}
+	if mongo.IsDuplicateKeyError(err) {
+		return fmt.Errorf("%s: %w", operation, basestore.ErrConflict)
+	}
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func deleteByID(ctx context.Context, collection *mongo.Collection, timeout time.Duration, id bson.ObjectID, entity string) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result, err := collection.DeleteOne(ctx, bson.M{"_id": id})
+	if err != nil {
+		return fmt.Errorf("delete %s: %w", entity, err)
+	}
+	if result.DeletedCount == 0 {
+		return fmt.Errorf("delete %s: %w", entity, basestore.ErrNotFound)
+	}
+	return nil
 }
 
 var (

@@ -17,7 +17,10 @@ type Config struct {
 	MongoConnectTimeout   time.Duration `env:"MONGODB_CONNECT_TIMEOUT" env-default:"10s"`
 	MongoOperationTimeout time.Duration `env:"MONGODB_OPERATION_TIMEOUT" env-default:"5s"`
 	JWTSecret             string        `env:"JWT_SECRET" env-required:"true"`
+	JWTIssuer             string        `env:"JWT_ISSUER" env-default:"go-auth-api"`
+	JWTAudience           string        `env:"JWT_AUDIENCE" env-default:"go-auth-clients"`
 	AccessTokenTTL        time.Duration `env:"ACCESS_TOKEN_TTL" env-default:"15m"`
+	PasswordBcryptCost    int           `env:"PASSWORD_BCRYPT_COST" env-default:"12"`
 	ShutdownTimeout       time.Duration `env:"SHUTDOWN_TIMEOUT" env-default:"10s"`
 }
 
@@ -39,6 +42,12 @@ func (c Config) Validate() error {
 	if len(c.JWTSecret) < 32 {
 		return errors.New("JWT_SECRET must contain at least 32 characters")
 	}
+	if c.JWTIssuer == "" {
+		return errors.New("JWT_ISSUER is required")
+	}
+	if c.JWTAudience == "" {
+		return errors.New("JWT_AUDIENCE is required")
+	}
 	if c.MongoConnectTimeout <= 0 {
 		return errors.New("MONGODB_CONNECT_TIMEOUT must be positive")
 	}
@@ -47,6 +56,9 @@ func (c Config) Validate() error {
 	}
 	if c.AccessTokenTTL <= 0 {
 		return errors.New("ACCESS_TOKEN_TTL must be positive")
+	}
+	if c.PasswordBcryptCost < 10 || c.PasswordBcryptCost > 31 {
+		return errors.New("PASSWORD_BCRYPT_COST must be between 10 and 31")
 	}
 	if c.ShutdownTimeout <= 0 {
 		return errors.New("SHUTDOWN_TIMEOUT must be positive")
