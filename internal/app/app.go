@@ -6,9 +6,11 @@ import (
 	"net/http"
 
 	"golang-auth/configs"
-	"golang-auth/db"
+	"golang-auth/internal/auth"
+	"golang-auth/internal/httpapi"
+	"golang-auth/internal/password"
 	mongostore "golang-auth/internal/store/mongo"
-	"golang-auth/routes"
+	"golang-auth/internal/token"
 
 	"github.com/labstack/echo/v4"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -28,7 +30,7 @@ func New(cfg configs.Config) (*App, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.MongoConnectTimeout)
 	defer cancel()
 
-	client, err := db.ConnectDB(ctx, cfg.MongoURI)
+	client, err := mongostore.Connect(ctx, cfg.MongoURI)
 	if err != nil {
 		return nil, fmt.Errorf("connect to MongoDB: %w", err)
 	}
@@ -37,11 +39,22 @@ func New(cfg configs.Config) (*App, error) {
 		_ = client.Disconnect(ctx)
 		return nil, fmt.Errorf("ensure MongoDB indexes: %w", err)
 	}
+	passwordHasher, err := password.NewHasher(cfg.PasswordBcryptCost)
+	if err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("configure password hashing: %w", err)
+	}
+	tokenSigner, err := token.NewSigner(cfg.JWTSecret, cfg.JWTIssuer, cfg.JWTAudience, cfg.AccessTokenTTL)
+	if err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("configure access tokens: %w", err)
+	}
+	authService := auth.NewService(store.Users, store.Organizations, store.Memberships, passwordHasher, tokenSigner)
 
 	server := echo.New()
 	server.HideBanner = true
 	registerHealthRoutes(server, client)
-	routes.InitRoutes(server, client, cfg)
+	httpapi.NewHandler(authService, tokenSigner, cfg.AccessTokenTTL).RegisterRoutes(server)
 
 	return &App{server: server, mongo: client}, nil
 }
