@@ -55,11 +55,13 @@ type Session struct {
 	UserID           bson.ObjectID `bson:"userId" json:"userId"`
 	OrganizationID   bson.ObjectID `bson:"organizationId" json:"organizationId"`
 	RefreshTokenHash string        `bson:"refreshTokenHash" json:"-"`
+	UsedTokenHashes  []string      `bson:"usedTokenHashes,omitempty" json:"-"`
 	TokenFamilyID    string        `bson:"tokenFamilyId" json:"-"`
 	IPAddress        string        `bson:"ipAddress,omitempty" json:"ipAddress,omitempty"`
 	UserAgent        string        `bson:"userAgent,omitempty" json:"userAgent,omitempty"`
 	ExpiresAt        time.Time     `bson:"expiresAt" json:"expiresAt"`
 	RevokedAt        *time.Time    `bson:"revokedAt,omitempty" json:"revokedAt,omitempty"`
+	RevocationReason string        `bson:"revocationReason,omitempty" json:"revocationReason,omitempty"`
 	CreatedAt        time.Time     `bson:"createdAt" json:"createdAt"`
 	LastUsedAt       time.Time     `bson:"lastUsedAt" json:"lastUsedAt"`
 }

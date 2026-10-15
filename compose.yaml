@@ -13,6 +13,7 @@ services:
       JWT_ISSUER: go-auth-api
       JWT_AUDIENCE: go-auth-clients
       PASSWORD_BCRYPT_COST: 12
+      REFRESH_TOKEN_TTL: 720h
     ports:
       - "8080:8080"
     depends_on:

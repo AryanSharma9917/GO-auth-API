@@ -77,7 +77,8 @@ func TestStoreIndexesAndUniqueness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create token signer: %v", err)
 	}
-	authService := auth.NewService(repositories.Users, repositories.Organizations, repositories.Memberships, hasher, signer)
+	refreshManager := token.NewRefreshManager()
+	authService := auth.NewService(repositories.Users, repositories.Organizations, repositories.Memberships, repositories.Sessions, hasher, signer, refreshManager, 30*24*time.Hour)
 	registered, err := authService.Register(ctx, auth.RegisterInput{
 		OrganizationName: "Registered Company", OrganizationSlug: "registered-company",
 		Email: "registered@example.com", DisplayName: "Registered Owner", Password: "a-secure-password",
@@ -97,6 +98,38 @@ func TestStoreIndexesAndUniqueness(t *testing.T) {
 	}
 	if claims.Subject != registered.User.ID.Hex() || claims.OrganizationID != registered.Organization.ID.Hex() || claims.Role != domain.RoleOwner {
 		t.Fatalf("unexpected login claims: %+v", claims)
+	}
+
+	refreshed, err := authService.Refresh(ctx, registered.RefreshToken, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("rotate refresh token: %v", err)
+	}
+	if refreshed.RefreshToken == registered.RefreshToken {
+		t.Fatal("refresh token was not rotated")
+	}
+	if _, err := authService.Refresh(ctx, registered.RefreshToken, 15*time.Minute); !errors.Is(err, auth.ErrRefreshTokenReuse) {
+		t.Fatalf("expected refresh token reuse detection, got %v", err)
+	}
+	if _, err := authService.Refresh(ctx, refreshed.RefreshToken, 15*time.Minute); !errors.Is(err, auth.ErrInvalidRefreshToken) {
+		t.Fatalf("expected token family revocation after reuse, got %v", err)
+	}
+
+	wrongOrganizationID := bson.NewObjectID().Hex()
+	if err := authService.RevokeSession(ctx, loggedIn.Session.ID.Hex(), loggedIn.User.ID.Hex(), wrongOrganizationID); !errors.Is(err, auth.ErrSessionNotFound) {
+		t.Fatalf("expected cross-organization session revocation to fail, got %v", err)
+	}
+	sessions, err := authService.Sessions(ctx, loggedIn.User.ID.Hex(), loggedIn.Organization.ID.Hex())
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) < 2 {
+		t.Fatalf("expected registration and login sessions, got %d", len(sessions))
+	}
+	if err := authService.LogoutAll(ctx, loggedIn.User.ID.Hex(), loggedIn.Organization.ID.Hex()); err != nil {
+		t.Fatalf("logout all sessions: %v", err)
+	}
+	if _, err := authService.Refresh(ctx, loggedIn.RefreshToken, 15*time.Minute); !errors.Is(err, auth.ErrInvalidRefreshToken) {
+		t.Fatalf("expected logged-out refresh token to be invalid, got %v", err)
 	}
 }
 

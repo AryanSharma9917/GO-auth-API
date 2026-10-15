@@ -21,6 +21,11 @@ const principalContextKey = "authenticated-principal"
 type AuthService interface {
 	Register(context.Context, auth.RegisterInput, time.Duration) (auth.Result, error)
 	Login(context.Context, auth.LoginInput, time.Duration) (auth.Result, error)
+	Refresh(context.Context, string, time.Duration) (auth.Result, error)
+	Logout(context.Context, string) error
+	LogoutAll(context.Context, string, string) error
+	Sessions(context.Context, string, string) ([]domain.Session, error)
+	RevokeSession(context.Context, string, string, string) error
 }
 
 type TokenParser interface {
@@ -54,13 +59,19 @@ type loginRequest struct {
 	Password         string `json:"password"`
 }
 
+type refreshTokenRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
 type authResponse struct {
-	AccessToken  string               `json:"access_token"`
-	TokenType    string               `json:"token_type"`
-	ExpiresIn    int64                `json:"expires_in"`
-	User         userResponse         `json:"user"`
-	Organization organizationResponse `json:"organization"`
-	Membership   membershipResponse   `json:"membership"`
+	AccessToken      string               `json:"access_token"`
+	TokenType        string               `json:"token_type"`
+	ExpiresIn        int64                `json:"expires_in"`
+	RefreshToken     string               `json:"refresh_token"`
+	RefreshExpiresIn int64                `json:"refresh_expires_in"`
+	User             userResponse         `json:"user"`
+	Organization     organizationResponse `json:"organization"`
+	Membership       membershipResponse   `json:"membership"`
 }
 
 type userResponse struct {
@@ -82,6 +93,17 @@ type membershipResponse struct {
 	State string      `json:"state"`
 }
 
+type sessionResponse struct {
+	ID               string     `json:"id"`
+	IPAddress        string     `json:"ip_address,omitempty"`
+	UserAgent        string     `json:"user_agent,omitempty"`
+	ExpiresAt        time.Time  `json:"expires_at"`
+	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
+	RevocationReason string     `json:"revocation_reason,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	LastUsedAt       time.Time  `json:"last_used_at"`
+}
+
 type errorEnvelope struct {
 	Error apiError `json:"error"`
 }
@@ -98,7 +120,12 @@ func NewHandler(authService AuthService, tokens TokenParser, accessTokenTTL time
 func (h *Handler) RegisterRoutes(server *echo.Echo) {
 	server.POST("/api/v1/organizations/register", h.register)
 	server.POST("/api/v1/auth/login", h.login)
+	server.POST("/api/v1/auth/refresh", h.refresh)
+	server.POST("/api/v1/auth/logout", h.logout)
 	server.GET("/api/v1/auth/me", h.me, h.authenticate)
+	server.POST("/api/v1/auth/logout-all", h.logoutAll, h.authenticate)
+	server.GET("/api/v1/auth/sessions", h.sessions, h.authenticate)
+	server.DELETE("/api/v1/auth/sessions/:sessionId", h.revokeSession, h.authenticate)
 }
 
 func (h *Handler) register(c echo.Context) error {
@@ -112,11 +139,13 @@ func (h *Handler) register(c echo.Context) error {
 		Email:            request.Email,
 		DisplayName:      request.DisplayName,
 		Password:         request.Password,
+		IPAddress:        c.RealIP(),
+		UserAgent:        c.Request().UserAgent(),
 	}, h.accessTokenTTL)
 	if err != nil {
 		return h.writeAuthError(c, err)
 	}
-	return c.JSON(http.StatusCreated, responseFromResult(result))
+	return writeAuthResponse(c, http.StatusCreated, result)
 }
 
 func (h *Handler) login(c echo.Context) error {
@@ -128,11 +157,65 @@ func (h *Handler) login(c echo.Context) error {
 		OrganizationSlug: request.OrganizationSlug,
 		Email:            request.Email,
 		Password:         request.Password,
+		IPAddress:        c.RealIP(),
+		UserAgent:        c.Request().UserAgent(),
 	}, h.accessTokenTTL)
 	if err != nil {
 		return h.writeAuthError(c, err)
 	}
-	return c.JSON(http.StatusOK, responseFromResult(result))
+	return writeAuthResponse(c, http.StatusOK, result)
+}
+
+func (h *Handler) refresh(c echo.Context) error {
+	var request refreshTokenRequest
+	if err := decodeJSON(c, &request); err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain one valid JSON object")
+	}
+	result, err := h.authService.Refresh(c.Request().Context(), request.RefreshToken, h.accessTokenTTL)
+	if err != nil {
+		return h.writeAuthError(c, err)
+	}
+	return writeAuthResponse(c, http.StatusOK, result)
+}
+
+func (h *Handler) logout(c echo.Context) error {
+	var request refreshTokenRequest
+	if err := decodeJSON(c, &request); err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain one valid JSON object")
+	}
+	if err := h.authService.Logout(c.Request().Context(), request.RefreshToken); err != nil {
+		return h.writeAuthError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+func (h *Handler) logoutAll(c echo.Context) error {
+	principal, _ := PrincipalFromContext(c)
+	if err := h.authService.LogoutAll(c.Request().Context(), principal.UserID, principal.OrganizationID); err != nil {
+		return h.writeAuthError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+func (h *Handler) sessions(c echo.Context) error {
+	principal, _ := PrincipalFromContext(c)
+	sessions, err := h.authService.Sessions(c.Request().Context(), principal.UserID, principal.OrganizationID)
+	if err != nil {
+		return h.writeAuthError(c, err)
+	}
+	response := make([]sessionResponse, 0, len(sessions))
+	for _, session := range sessions {
+		response = append(response, sessionResponseFromDomain(session))
+	}
+	return c.JSON(http.StatusOK, map[string]any{"sessions": response})
+}
+
+func (h *Handler) revokeSession(c echo.Context) error {
+	principal, _ := PrincipalFromContext(c)
+	if err := h.authService.RevokeSession(c.Request().Context(), c.Param("sessionId"), principal.UserID, principal.OrganizationID); err != nil {
+		return h.writeAuthError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (h *Handler) me(c echo.Context) error {
@@ -184,6 +267,12 @@ func (h *Handler) writeAuthError(c echo.Context, err error) error {
 		return writeError(c, http.StatusConflict, "resource_conflict", "The account or organization already exists")
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		return writeError(c, http.StatusUnauthorized, "invalid_credentials", "Invalid email, password, or organization")
+	case errors.Is(err, auth.ErrInvalidRefreshToken):
+		return writeError(c, http.StatusUnauthorized, "invalid_refresh_token", "The refresh token is invalid or expired")
+	case errors.Is(err, auth.ErrRefreshTokenReuse):
+		return writeError(c, http.StatusUnauthorized, "refresh_token_reuse", "Refresh token reuse was detected and the session was revoked")
+	case errors.Is(err, auth.ErrSessionNotFound):
+		return writeError(c, http.StatusNotFound, "session_not_found", "The session was not found")
 	default:
 		return writeError(c, http.StatusInternalServerError, "internal_error", "An unexpected error occurred")
 	}
@@ -193,13 +282,29 @@ func writeError(c echo.Context, status int, code, message string) error {
 	return c.JSON(status, errorEnvelope{Error: apiError{Code: code, Message: message}})
 }
 
+func writeAuthResponse(c echo.Context, status int, result auth.Result) error {
+	c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+	c.Response().Header().Set("Pragma", "no-cache")
+	return c.JSON(status, responseFromResult(result))
+}
+
 func responseFromResult(result auth.Result) authResponse {
 	return authResponse{
-		AccessToken:  result.AccessToken,
-		TokenType:    "Bearer",
-		ExpiresIn:    int64(result.ExpiresIn.Seconds()),
-		User:         userResponse{ID: result.User.ID.Hex(), Email: result.User.Email, DisplayName: result.User.DisplayName, EmailVerified: result.User.EmailVerified},
-		Organization: organizationResponse{ID: result.Organization.ID.Hex(), Name: result.Organization.Name, Slug: result.Organization.Slug},
-		Membership:   membershipResponse{ID: result.Membership.ID.Hex(), Role: result.Membership.Role, State: string(result.Membership.State)},
+		AccessToken:      result.AccessToken,
+		TokenType:        "Bearer",
+		ExpiresIn:        int64(result.ExpiresIn.Seconds()),
+		RefreshToken:     result.RefreshToken,
+		RefreshExpiresIn: int64(result.RefreshExpiresIn.Seconds()),
+		User:             userResponse{ID: result.User.ID.Hex(), Email: result.User.Email, DisplayName: result.User.DisplayName, EmailVerified: result.User.EmailVerified},
+		Organization:     organizationResponse{ID: result.Organization.ID.Hex(), Name: result.Organization.Name, Slug: result.Organization.Slug},
+		Membership:       membershipResponse{ID: result.Membership.ID.Hex(), Role: result.Membership.Role, State: string(result.Membership.State)},
+	}
+}
+
+func sessionResponseFromDomain(session domain.Session) sessionResponse {
+	return sessionResponse{
+		ID: session.ID.Hex(), IPAddress: session.IPAddress, UserAgent: session.UserAgent,
+		ExpiresAt: session.ExpiresAt, RevokedAt: session.RevokedAt, RevocationReason: session.RevocationReason,
+		CreatedAt: session.CreatedAt, LastUsedAt: session.LastUsedAt,
 	}
 }
