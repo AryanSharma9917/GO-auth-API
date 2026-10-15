@@ -7,10 +7,12 @@ import (
 
 func TestConfigValidate(t *testing.T) {
 	valid := Config{
-		MongoURI:        "mongodb://localhost:27017",
-		JWTSecret:       "a-secret-that-is-at-least-32-characters",
-		AccessTokenTTL:  15 * time.Minute,
-		ShutdownTimeout: 10 * time.Second,
+		MongoURI:              "mongodb://localhost:27017",
+		MongoConnectTimeout:   10 * time.Second,
+		MongoOperationTimeout: 5 * time.Second,
+		JWTSecret:             "a-secret-that-is-at-least-32-characters",
+		AccessTokenTTL:        15 * time.Minute,
+		ShutdownTimeout:       10 * time.Second,
 	}
 
 	tests := []struct {
@@ -19,6 +21,8 @@ func TestConfigValidate(t *testing.T) {
 	}{
 		{name: "missing MongoDB URI", change: func(c *Config) { c.MongoURI = "" }},
 		{name: "short JWT secret", change: func(c *Config) { c.JWTSecret = "too-short" }},
+		{name: "invalid MongoDB connect timeout", change: func(c *Config) { c.MongoConnectTimeout = 0 }},
+		{name: "invalid MongoDB operation timeout", change: func(c *Config) { c.MongoOperationTimeout = 0 }},
 		{name: "invalid access token TTL", change: func(c *Config) { c.AccessTokenTTL = 0 }},
 		{name: "invalid shutdown timeout", change: func(c *Config) { c.ShutdownTimeout = 0 }},
 	}

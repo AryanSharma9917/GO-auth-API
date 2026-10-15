@@ -5,7 +5,7 @@ import (
 	"golang-auth/controllers"
 
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 func InitRoutes(e *echo.Echo, client *mongo.Client, cfg configs.Config) {
