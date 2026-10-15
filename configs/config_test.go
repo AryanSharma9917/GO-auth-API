@@ -14,6 +14,7 @@ func TestConfigValidate(t *testing.T) {
 		JWTIssuer:             "go-auth-api",
 		JWTAudience:           "go-auth-clients",
 		AccessTokenTTL:        15 * time.Minute,
+		RefreshTokenTTL:       30 * 24 * time.Hour,
 		PasswordBcryptCost:    12,
 		ShutdownTimeout:       10 * time.Second,
 	}
@@ -29,6 +30,7 @@ func TestConfigValidate(t *testing.T) {
 		{name: "invalid MongoDB connect timeout", change: func(c *Config) { c.MongoConnectTimeout = 0 }},
 		{name: "invalid MongoDB operation timeout", change: func(c *Config) { c.MongoOperationTimeout = 0 }},
 		{name: "invalid access token TTL", change: func(c *Config) { c.AccessTokenTTL = 0 }},
+		{name: "short refresh token TTL", change: func(c *Config) { c.RefreshTokenTTL = c.AccessTokenTTL }},
 		{name: "weak bcrypt cost", change: func(c *Config) { c.PasswordBcryptCost = 9 }},
 		{name: "invalid shutdown timeout", change: func(c *Config) { c.ShutdownTimeout = 0 }},
 	}

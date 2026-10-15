@@ -20,6 +20,7 @@ type Config struct {
 	JWTIssuer             string        `env:"JWT_ISSUER" env-default:"go-auth-api"`
 	JWTAudience           string        `env:"JWT_AUDIENCE" env-default:"go-auth-clients"`
 	AccessTokenTTL        time.Duration `env:"ACCESS_TOKEN_TTL" env-default:"15m"`
+	RefreshTokenTTL       time.Duration `env:"REFRESH_TOKEN_TTL" env-default:"720h"`
 	PasswordBcryptCost    int           `env:"PASSWORD_BCRYPT_COST" env-default:"12"`
 	ShutdownTimeout       time.Duration `env:"SHUTDOWN_TIMEOUT" env-default:"10s"`
 }
@@ -56,6 +57,9 @@ func (c Config) Validate() error {
 	}
 	if c.AccessTokenTTL <= 0 {
 		return errors.New("ACCESS_TOKEN_TTL must be positive")
+	}
+	if c.RefreshTokenTTL <= c.AccessTokenTTL {
+		return errors.New("REFRESH_TOKEN_TTL must be greater than ACCESS_TOKEN_TTL")
 	}
 	if c.PasswordBcryptCost < 10 || c.PasswordBcryptCost > 31 {
 		return errors.New("PASSWORD_BCRYPT_COST must be between 10 and 31")

@@ -77,6 +77,7 @@ func (s *Store) EnsureIndexes(ctx context.Context) error {
 		},
 		sessionsCollection: {
 			{Keys: bson.D{{Key: "refreshTokenHash", Value: 1}}, Options: options.Index().SetUnique(true).SetName("sessions_refresh_token_hash_unique")},
+			{Keys: bson.D{{Key: "usedTokenHashes", Value: 1}}, Options: options.Index().SetName("sessions_used_token_hashes")},
 			{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "organizationId", Value: 1}}, Options: options.Index().SetName("sessions_user_organization")},
 			{Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0).SetName("sessions_expiry_ttl")},
 		},
@@ -229,10 +230,81 @@ func (r *SessionRepository) ByRefreshTokenHash(ctx context.Context, hash string)
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 	var session domain.Session
-	if err := r.collection.FindOne(ctx, bson.M{"refreshTokenHash": hash}).Decode(&session); err != nil {
+	filter := bson.M{"$or": bson.A{bson.M{"refreshTokenHash": hash}, bson.M{"usedTokenHashes": hash}}}
+	if err := r.collection.FindOne(ctx, filter).Decode(&session); err != nil {
 		return session, repositoryError("find session", err)
 	}
 	return session, nil
+}
+
+func (r *SessionRepository) ByIDForPrincipal(ctx context.Context, id, userID, organizationID bson.ObjectID) (domain.Session, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	var session domain.Session
+	filter := bson.M{"_id": id, "userId": userID, "organizationId": organizationID}
+	if err := r.collection.FindOne(ctx, filter).Decode(&session); err != nil {
+		return session, repositoryError("find session", err)
+	}
+	return session, nil
+}
+
+func (r *SessionRepository) ListForPrincipal(ctx context.Context, userID, organizationID bson.ObjectID) ([]domain.Session, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{"userId": userID, "organizationId": organizationID}
+	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "lastUsedAt", Value: -1}}))
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	var sessions []domain.Session
+	if err := cursor.All(ctx, &sessions); err != nil {
+		return nil, fmt.Errorf("decode sessions: %w", err)
+	}
+	return sessions, nil
+}
+
+func (r *SessionRepository) Rotate(ctx context.Context, id bson.ObjectID, currentHash, replacementHash string, usedAt time.Time) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{
+		"_id": id, "refreshTokenHash": currentHash,
+		"revokedAt": bson.M{"$exists": false}, "expiresAt": bson.M{"$gt": usedAt},
+	}
+	update := bson.M{
+		"$set":  bson.M{"refreshTokenHash": replacementHash, "lastUsedAt": usedAt},
+		"$push": bson.M{"usedTokenHashes": currentHash},
+	}
+	result, err := r.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("rotate session: %w", err)
+	}
+	if result.ModifiedCount != 1 {
+		return fmt.Errorf("rotate session: %w", basestore.ErrConflict)
+	}
+	return nil
+}
+
+func (r *SessionRepository) Revoke(ctx context.Context, id bson.ObjectID, revokedAt time.Time, reason string) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{"_id": id, "revokedAt": bson.M{"$exists": false}}
+	update := bson.M{"$set": bson.M{"revokedAt": revokedAt, "revocationReason": reason}}
+	if _, err := r.collection.UpdateOne(ctx, filter, update); err != nil {
+		return fmt.Errorf("revoke session: %w", err)
+	}
+	return nil
+}
+
+func (r *SessionRepository) RevokeAll(ctx context.Context, userID, organizationID bson.ObjectID, revokedAt time.Time, reason string) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{"userId": userID, "organizationId": organizationID, "revokedAt": bson.M{"$exists": false}}
+	update := bson.M{"$set": bson.M{"revokedAt": revokedAt, "revocationReason": reason}}
+	if _, err := r.collection.UpdateMany(ctx, filter, update); err != nil {
+		return fmt.Errorf("revoke sessions: %w", err)
+	}
+	return nil
 }
 
 type InvitationRepository struct {

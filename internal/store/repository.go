@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"golang-auth/internal/domain"
 
@@ -35,6 +36,11 @@ type MembershipRepository interface {
 type SessionRepository interface {
 	Create(context.Context, domain.Session) (domain.Session, error)
 	ByRefreshTokenHash(context.Context, string) (domain.Session, error)
+	ByIDForPrincipal(context.Context, bson.ObjectID, bson.ObjectID, bson.ObjectID) (domain.Session, error)
+	ListForPrincipal(context.Context, bson.ObjectID, bson.ObjectID) ([]domain.Session, error)
+	Rotate(context.Context, bson.ObjectID, string, string, time.Time) error
+	Revoke(context.Context, bson.ObjectID, time.Time, string) error
+	RevokeAll(context.Context, bson.ObjectID, bson.ObjectID, time.Time, string) error
 }
 
 type InvitationRepository interface {

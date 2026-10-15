@@ -28,6 +28,17 @@ func (s authServiceStub) Register(context.Context, auth.RegisterInput, time.Dura
 func (s authServiceStub) Login(context.Context, auth.LoginInput, time.Duration) (auth.Result, error) {
 	return s.result, s.err
 }
+func (s authServiceStub) Refresh(context.Context, string, time.Duration) (auth.Result, error) {
+	return s.result, s.err
+}
+func (s authServiceStub) Logout(context.Context, string) error            { return s.err }
+func (s authServiceStub) LogoutAll(context.Context, string, string) error { return s.err }
+func (s authServiceStub) Sessions(context.Context, string, string) ([]domain.Session, error) {
+	return nil, s.err
+}
+func (s authServiceStub) RevokeSession(context.Context, string, string, string) error {
+	return s.err
+}
 
 func TestRegisterResponseDoesNotExposePasswordHash(t *testing.T) {
 	result := auth.Result{

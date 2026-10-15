@@ -49,7 +49,8 @@ func New(cfg configs.Config) (*App, error) {
 		_ = client.Disconnect(ctx)
 		return nil, fmt.Errorf("configure access tokens: %w", err)
 	}
-	authService := auth.NewService(store.Users, store.Organizations, store.Memberships, passwordHasher, tokenSigner)
+	refreshManager := token.NewRefreshManager()
+	authService := auth.NewService(store.Users, store.Organizations, store.Memberships, store.Sessions, passwordHasher, tokenSigner, refreshManager, cfg.RefreshTokenTTL)
 
 	server := echo.New()
 	server.HideBanner = true
