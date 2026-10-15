@@ -7,11 +7,12 @@ import (
 
 	"golang-auth/configs"
 	"golang-auth/db"
+	mongostore "golang-auth/internal/store/mongo"
 	"golang-auth/routes"
 
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
 
 type healthChecker interface {
@@ -24,9 +25,17 @@ type App struct {
 }
 
 func New(cfg configs.Config) (*App, error) {
-	client, err := db.ConnectDB(cfg.MongoURI)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.MongoConnectTimeout)
+	defer cancel()
+
+	client, err := db.ConnectDB(ctx, cfg.MongoURI)
 	if err != nil {
 		return nil, fmt.Errorf("connect to MongoDB: %w", err)
+	}
+	store := mongostore.New(client, cfg.DatabaseName, cfg.MongoOperationTimeout)
+	if err := store.EnsureIndexes(ctx); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("ensure MongoDB indexes: %w", err)
 	}
 
 	server := echo.New()

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
 
 type stubHealthChecker struct {
