@@ -5,18 +5,23 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"golang-auth/internal/audit"
 	"golang-auth/internal/auth"
 	"golang-auth/internal/domain"
 	"golang-auth/internal/invitation"
 	"golang-auth/internal/organization"
+	"golang-auth/internal/recovery"
 	"golang-auth/internal/token"
 
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"golang.org/x/time/rate"
 )
 
 const principalContextKey = "authenticated-principal"
@@ -50,12 +55,36 @@ type InvitationService interface {
 	Accept(context.Context, string, invitation.AcceptInput) (invitation.Acceptance, error)
 }
 
+type AuditService interface {
+	Record(context.Context, audit.RecordInput) error
+	List(context.Context, audit.Actor, string, string, int) (audit.Page, error)
+}
+
+type RecoveryService interface {
+	Request(context.Context, string) error
+	Confirm(context.Context, string, string) error
+	Change(context.Context, string, string, string) error
+}
+
 type Handler struct {
 	authService    AuthService
 	tokens         TokenParser
 	accessTokenTTL time.Duration
 	organizations  OrganizationService
 	invitations    InvitationService
+	audit          AuditService
+	rateLimit      rate.Limit
+	recovery       RecoveryService
+}
+
+func (h *Handler) WithSensitiveRateLimit(requestsPerSecond float64) *Handler {
+	h.rateLimit = rate.Limit(requestsPerSecond)
+	return h
+}
+
+func (h *Handler) WithRecoveryService(service RecoveryService) *Handler {
+	h.recovery = service
+	return h
 }
 
 type Principal struct {
@@ -100,6 +129,18 @@ type createInvitationRequest struct {
 type acceptInvitationRequest struct {
 	DisplayName string `json:"display_name"`
 	Password    string `json:"password"`
+}
+
+type passwordResetRequest struct {
+	Email string `json:"email"`
+}
+type passwordResetConfirmRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+type passwordChangeRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
 }
 
 type authResponse struct {
@@ -179,11 +220,25 @@ func (h *Handler) WithInvitationService(service InvitationService) *Handler {
 	return h
 }
 
+func (h *Handler) WithAuditService(service AuditService) *Handler {
+	h.audit = service
+	return h
+}
+
 func (h *Handler) RegisterRoutes(server *echo.Echo) {
-	server.POST("/api/v1/organizations/register", h.register)
-	server.POST("/api/v1/auth/login", h.login)
-	server.POST("/api/v1/auth/refresh", h.refresh)
+	var sensitive []echo.MiddlewareFunc
+	if h.rateLimit > 0 {
+		sensitive = []echo.MiddlewareFunc{middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(h.rateLimit))}
+	}
+	server.POST("/api/v1/organizations/register", h.register, sensitive...)
+	server.POST("/api/v1/auth/login", h.login, sensitive...)
+	server.POST("/api/v1/auth/refresh", h.refresh, sensitive...)
 	server.POST("/api/v1/auth/logout", h.logout)
+	if h.recovery != nil {
+		server.POST("/api/v1/auth/password/reset-request", h.requestPasswordReset, sensitive...)
+		server.POST("/api/v1/auth/password/reset-confirm", h.confirmPasswordReset, sensitive...)
+		server.POST("/api/v1/auth/password/change", h.changePassword, h.authenticate)
+	}
 	server.GET("/api/v1/auth/me", h.me, h.authenticate)
 	server.POST("/api/v1/auth/logout-all", h.logoutAll, h.authenticate)
 	server.GET("/api/v1/auth/sessions", h.sessions, h.authenticate)
@@ -196,11 +251,61 @@ func (h *Handler) RegisterRoutes(server *echo.Echo) {
 		server.DELETE("/api/v1/organizations/current/members/:memberId", h.removeMember, h.authenticate)
 	}
 	if h.invitations != nil {
-		server.POST("/api/v1/organizations/current/invitations", h.createInvitation, h.authenticate)
+		server.POST("/api/v1/organizations/current/invitations", h.createInvitation, append([]echo.MiddlewareFunc{h.authenticate}, sensitive...)...)
 		server.GET("/api/v1/organizations/current/invitations", h.invitationsList, h.authenticate)
 		server.DELETE("/api/v1/organizations/current/invitations/:invitationId", h.revokeInvitation, h.authenticate)
-		server.POST("/api/v1/invitations/:token/accept", h.acceptInvitation)
+		server.POST("/api/v1/invitations/:token/accept", h.acceptInvitation, sensitive...)
 	}
+	if h.audit != nil {
+		server.GET("/api/v1/organizations/current/audit-events", h.auditEvents, h.authenticate)
+	}
+}
+
+func (h *Handler) requestPasswordReset(c echo.Context) error {
+	var request passwordResetRequest
+	if err := decodeJSON(c, &request); err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain one valid JSON object")
+	}
+	if err := h.recovery.Request(c.Request().Context(), request.Email); err != nil {
+		return writeError(c, http.StatusInternalServerError, "internal_error", "An unexpected error occurred")
+	}
+	return c.JSON(http.StatusAccepted, map[string]string{"message": "If the account exists, reset instructions will be sent"})
+}
+
+func (h *Handler) confirmPasswordReset(c echo.Context) error {
+	var request passwordResetConfirmRequest
+	if err := decodeJSON(c, &request); err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain one valid JSON object")
+	}
+	if err := h.recovery.Confirm(c.Request().Context(), request.Token, request.NewPassword); err != nil {
+		if errors.Is(err, recovery.ErrInvalidInput) {
+			return writeError(c, http.StatusUnprocessableEntity, "validation_failed", "The new password is invalid")
+		}
+		if errors.Is(err, recovery.ErrInvalidToken) {
+			return writeError(c, http.StatusUnauthorized, "invalid_reset_token", "The reset token is invalid or expired")
+		}
+		return writeError(c, http.StatusInternalServerError, "internal_error", "An unexpected error occurred")
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+func (h *Handler) changePassword(c echo.Context) error {
+	var request passwordChangeRequest
+	if err := decodeJSON(c, &request); err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain one valid JSON object")
+	}
+	principal, _ := PrincipalFromContext(c)
+	if err := h.recovery.Change(c.Request().Context(), principal.UserID, request.CurrentPassword, request.NewPassword); err != nil {
+		if errors.Is(err, recovery.ErrInvalidInput) {
+			return writeError(c, http.StatusUnprocessableEntity, "validation_failed", "The new password is invalid")
+		}
+		if errors.Is(err, recovery.ErrUnauthorized) {
+			return writeError(c, http.StatusUnauthorized, "invalid_credentials", "The current password is invalid")
+		}
+		return writeError(c, http.StatusInternalServerError, "internal_error", "An unexpected error occurred")
+	}
+	h.recordAudit(c, principal.OrganizationID, principal.UserID, "password.changed", "user", principal.UserID, nil)
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (h *Handler) register(c echo.Context) error {
@@ -220,6 +325,7 @@ func (h *Handler) register(c echo.Context) error {
 	if err != nil {
 		return h.writeAuthError(c, err)
 	}
+	h.recordAudit(c, result.Organization.ID.Hex(), result.User.ID.Hex(), "organization.registered", "organization", result.Organization.ID.Hex(), nil)
 	return writeAuthResponse(c, http.StatusCreated, result)
 }
 
@@ -238,6 +344,7 @@ func (h *Handler) login(c echo.Context) error {
 	if err != nil {
 		return h.writeAuthError(c, err)
 	}
+	h.recordAudit(c, result.Organization.ID.Hex(), result.User.ID.Hex(), "auth.login", "session", result.Session.ID.Hex(), nil)
 	return writeAuthResponse(c, http.StatusOK, result)
 }
 
@@ -269,6 +376,7 @@ func (h *Handler) logoutAll(c echo.Context) error {
 	if err := h.authService.LogoutAll(c.Request().Context(), principal.UserID, principal.OrganizationID); err != nil {
 		return h.writeAuthError(c, err)
 	}
+	h.recordAudit(c, principal.OrganizationID, principal.UserID, "session.revoked_all", "user", principal.UserID, nil)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -290,6 +398,7 @@ func (h *Handler) revokeSession(c echo.Context) error {
 	if err := h.authService.RevokeSession(c.Request().Context(), c.Param("sessionId"), principal.UserID, principal.OrganizationID); err != nil {
 		return h.writeAuthError(c, err)
 	}
+	h.recordAudit(c, principal.OrganizationID, principal.UserID, "session.revoked", "session", c.Param("sessionId"), nil)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -315,6 +424,7 @@ func (h *Handler) updateOrganization(c echo.Context) error {
 	if err != nil {
 		return h.writeOrganizationError(c, err)
 	}
+	h.recordAudit(c, principal.OrganizationID, principal.UserID, "organization.updated", "organization", principal.OrganizationID, nil)
 	return c.JSON(http.StatusOK, organizationResponse{ID: organizationValue.ID.Hex(), Name: organizationValue.Name, Slug: organizationValue.Slug})
 }
 
@@ -349,6 +459,7 @@ func (h *Handler) updateMember(c echo.Context) error {
 	if err != nil {
 		return h.writeOrganizationError(c, err)
 	}
+	h.recordAudit(c, principal.OrganizationID, principal.UserID, "membership.updated", "membership", c.Param("memberId"), map[string]any{"role": member.Membership.Role, "state": member.Membership.State})
 	return c.JSON(http.StatusOK, memberResponseFromDomain(member))
 }
 
@@ -357,6 +468,7 @@ func (h *Handler) removeMember(c echo.Context) error {
 	if err := h.organizations.RemoveMember(c.Request().Context(), actorFromPrincipal(principal), c.Param("memberId")); err != nil {
 		return h.writeOrganizationError(c, err)
 	}
+	h.recordAudit(c, principal.OrganizationID, principal.UserID, "membership.removed", "membership", c.Param("memberId"), nil)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -370,6 +482,7 @@ func (h *Handler) createInvitation(c echo.Context) error {
 	if err != nil {
 		return h.writeInvitationError(c, err)
 	}
+	h.recordAudit(c, principal.OrganizationID, principal.UserID, "invitation.created", "invitation", value.ID.Hex(), map[string]any{"email": value.Email, "role": value.Role})
 	return c.JSON(http.StatusCreated, invitationResponseFromDomain(value, time.Now().UTC()))
 }
 
@@ -400,6 +513,7 @@ func (h *Handler) revokeInvitation(c echo.Context) error {
 	if err := h.invitations.Revoke(c.Request().Context(), invitationActor(principal), c.Param("invitationId")); err != nil {
 		return h.writeInvitationError(c, err)
 	}
+	h.recordAudit(c, principal.OrganizationID, principal.UserID, "invitation.revoked", "invitation", c.Param("invitationId"), nil)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -412,11 +526,49 @@ func (h *Handler) acceptInvitation(c echo.Context) error {
 	if err != nil {
 		return h.writeInvitationError(c, err)
 	}
+	h.recordAudit(c, accepted.Organization.ID.Hex(), accepted.User.ID.Hex(), "invitation.accepted", "membership", accepted.Membership.ID.Hex(), nil)
 	return c.JSON(http.StatusCreated, map[string]any{
 		"user":         userResponse{ID: accepted.User.ID.Hex(), Email: accepted.User.Email, DisplayName: accepted.User.DisplayName, EmailVerified: accepted.User.EmailVerified},
 		"organization": organizationResponse{ID: accepted.Organization.ID.Hex(), Name: accepted.Organization.Name, Slug: accepted.Organization.Slug},
 		"membership":   membershipResponseFromDomain(accepted.Membership),
 	})
+}
+
+func (h *Handler) auditEvents(c echo.Context) error {
+	limit := 0
+	if value := c.QueryParam("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return writeError(c, http.StatusUnprocessableEntity, "validation_failed", "The pagination limit is invalid")
+		}
+		limit = parsed
+	}
+	principal, _ := PrincipalFromContext(c)
+	page, err := h.audit.List(c.Request().Context(), audit.Actor{UserID: principal.UserID, OrganizationID: principal.OrganizationID}, c.QueryParam("cursor"), c.QueryParam("action"), limit)
+	if err != nil {
+		switch {
+		case errors.Is(err, audit.ErrInvalidInput):
+			return writeError(c, http.StatusUnprocessableEntity, "validation_failed", "The audit query is invalid")
+		case errors.Is(err, audit.ErrForbidden):
+			return writeError(c, http.StatusForbidden, "forbidden", "You do not have permission to view audit events")
+		default:
+			return writeError(c, http.StatusInternalServerError, "internal_error", "An unexpected error occurred")
+		}
+	}
+	return c.JSON(http.StatusOK, map[string]any{"events": page.Events, "next_cursor": page.NextCursor})
+}
+
+func (h *Handler) recordAudit(c echo.Context, organizationID, actorUserID, action, targetType, targetID string, metadata map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	err := h.audit.Record(context.WithoutCancel(c.Request().Context()), audit.RecordInput{
+		OrganizationID: organizationID, ActorUserID: actorUserID, Action: action, TargetType: targetType,
+		TargetID: targetID, RequestID: c.Response().Header().Get(echo.HeaderXRequestID), IPAddress: c.RealIP(), Metadata: metadata,
+	})
+	if err != nil {
+		slog.Error("failed to record audit event", "action", action, "error", err)
+	}
 }
 
 func (h *Handler) me(c echo.Context) error {

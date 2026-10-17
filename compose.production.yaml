@@ -1,0 +1,29 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8080
+      MONGODB_URI: ${MONGODB_URI:?required}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-goapi-auth}
+      JWT_SECRET: ${JWT_SECRET:?required}
+      JWT_ISSUER: ${JWT_ISSUER:-go-auth-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-go-auth-clients}
+      APPLICATION_BASE_URL: ${APPLICATION_BASE_URL:?required}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?required}
+      REQUEST_BODY_LIMIT: ${REQUEST_BODY_LIMIT:-1M}
+      SENSITIVE_RATE_LIMIT: ${SENSITIVE_RATE_LIMIT:-5}
+      SMTP_HOST: ${SMTP_HOST:?required}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:?required}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?required}
+      SMTP_FROM: ${SMTP_FROM:?required}
+    ports:
+      - "8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

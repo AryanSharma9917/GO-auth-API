@@ -1,46 +1,39 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
 name: Go
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-
-  build:
+  verify:
     runs-on: ubuntu-latest
     services:
       mongo:
         image: mongo:8.0
-        ports:
-          - 27017:27017
+        ports: [27017:27017]
         options: >-
           --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\").ok'"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+          --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       MONGODB_TEST_URI: mongodb://localhost:27017
     steps:
-    - uses: actions/checkout@v6
-
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.27.2'
-
-    - name: Format
-      run: test -z "$(gofmt -l .)"
-
-    - name: Vet
-      run: go vet ./...
-
-    - name: Build
-      run: go build -v ./...
-
-    - name: Test
-      run: go test -v ./...
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with: {go-version: '1.27.2', cache: true}
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Test with race detector
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Build binary
+        run: go build -trimpath ./...
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Build production image
+        run: docker build -t go-auth-api:test .

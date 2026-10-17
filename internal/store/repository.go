@@ -19,6 +19,7 @@ type UserRepository interface {
 	ByEmail(context.Context, string) (domain.User, error)
 	ByIDs(context.Context, []bson.ObjectID) ([]domain.User, error)
 	Delete(context.Context, bson.ObjectID) error
+	UpdatePassword(context.Context, bson.ObjectID, string, time.Time) error
 }
 
 type OrganizationRepository interface {
@@ -49,6 +50,11 @@ type SessionRepository interface {
 	RevokeAll(context.Context, bson.ObjectID, bson.ObjectID, time.Time, string) error
 }
 
+type PasswordResetRepository interface {
+	Create(context.Context, domain.PasswordReset) (domain.PasswordReset, error)
+	Consume(context.Context, string, time.Time) (domain.PasswordReset, error)
+}
+
 type InvitationRepository interface {
 	Create(context.Context, domain.Invitation) (domain.Invitation, error)
 	ByTokenHash(context.Context, string) (domain.Invitation, error)
@@ -62,4 +68,5 @@ type InvitationRepository interface {
 
 type AuditRepository interface {
 	Create(context.Context, domain.AuditEvent) (domain.AuditEvent, error)
+	ListForOrganization(context.Context, bson.ObjectID, bson.ObjectID, string, int64) ([]domain.AuditEvent, error)
 }
