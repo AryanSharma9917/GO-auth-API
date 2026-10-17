@@ -9,6 +9,8 @@ import (
 
 	"golang-auth/internal/auth"
 	"golang-auth/internal/domain"
+	invitationservice "golang-auth/internal/invitation"
+	"golang-auth/internal/mailer"
 	organizationservice "golang-auth/internal/organization"
 	"golang-auth/internal/password"
 	basestore "golang-auth/internal/store"
@@ -20,6 +22,15 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"golang.org/x/crypto/bcrypt"
 )
+
+type captureMailer struct {
+	invitation mailer.Invitation
+}
+
+func (m *captureMailer) SendInvitation(_ context.Context, invitation mailer.Invitation) error {
+	m.invitation = invitation
+	return nil
+}
 
 func TestStoreIndexesAndUniqueness(t *testing.T) {
 	uri := os.Getenv("MONGODB_TEST_URI")
@@ -135,6 +146,70 @@ func TestStoreIndexesAndUniqueness(t *testing.T) {
 
 	organizationService := organizationservice.NewService(repositories.Users, repositories.Organizations, repositories.Memberships, repositories.Sessions)
 	ownerActor := organizationservice.Actor{UserID: registered.User.ID.Hex(), OrganizationID: registered.Organization.ID.Hex()}
+	mailCapture := &captureMailer{}
+	invitationService := invitationservice.NewService(repositories.Users, repositories.Organizations, repositories.Memberships, repositories.Invitations, hasher, refreshManager, mailCapture, 72*time.Hour)
+	invitationActor := invitationservice.Actor{UserID: registered.User.ID.Hex(), OrganizationID: registered.Organization.ID.Hex()}
+	memberInvitation, err := invitationService.Create(ctx, invitationActor, invitationservice.CreateInput{Email: "invited@example.com", Role: domain.RoleMember})
+	if err != nil {
+		t.Fatalf("create member invitation: %v", err)
+	}
+	if mailCapture.invitation.Token == "" || mailCapture.invitation.Token == memberInvitation.TokenHash {
+		t.Fatal("expected mailer to receive a raw token distinct from the stored hash")
+	}
+	if _, err := invitationService.Create(ctx, invitationActor, invitationservice.CreateInput{Email: "invited@example.com", Role: domain.RoleMember}); !errors.Is(err, invitationservice.ErrConflict) {
+		t.Fatalf("expected duplicate pending invitation conflict, got %v", err)
+	}
+	accepted, err := invitationService.Accept(ctx, mailCapture.invitation.Token, invitationservice.AcceptInput{DisplayName: "Invited Member", Password: "a-secure-password"})
+	if err != nil {
+		t.Fatalf("accept invitation: %v", err)
+	}
+	if accepted.Membership.OrganizationID != registered.Organization.ID || accepted.Membership.Role != domain.RoleMember || !accepted.User.EmailVerified {
+		t.Fatalf("unexpected invitation acceptance: %+v", accepted)
+	}
+	memberActor := invitationservice.Actor{UserID: accepted.User.ID.Hex(), OrganizationID: registered.Organization.ID.Hex()}
+	if _, err := invitationService.Create(ctx, memberActor, invitationservice.CreateInput{Email: "forbidden@example.com", Role: domain.RoleMember}); !errors.Is(err, invitationservice.ErrForbidden) {
+		t.Fatalf("expected regular member invitation creation to be forbidden, got %v", err)
+	}
+	adminUser, err := repositories.Users.Create(ctx, domain.User{Email: "invite-admin@example.com", DisplayName: "Invite Admin", PasswordHash: "not-a-real-password-hash", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create invitation admin user: %v", err)
+	}
+	adminMembership, err := repositories.Memberships.Create(ctx, domain.Membership{OrganizationID: registered.Organization.ID, UserID: adminUser.ID, Role: domain.RoleAdmin, State: domain.MembershipActive, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create invitation admin membership: %v", err)
+	}
+	adminActor := invitationservice.Actor{UserID: adminMembership.UserID.Hex(), OrganizationID: registered.Organization.ID.Hex()}
+	if _, err := invitationService.Create(ctx, adminActor, invitationservice.CreateInput{Email: "admin-role@example.com", Role: domain.RoleAdmin}); !errors.Is(err, invitationservice.ErrForbidden) {
+		t.Fatalf("expected admin to be unable to invite another admin, got %v", err)
+	}
+	if _, err := invitationService.Accept(ctx, mailCapture.invitation.Token, invitationservice.AcceptInput{DisplayName: "Invited Member", Password: "a-secure-password"}); !errors.Is(err, invitationservice.ErrInvalidInvitation) {
+		t.Fatalf("expected accepted invitation token to be single-use, got %v", err)
+	}
+	revokedInvitation, err := invitationService.Create(ctx, invitationActor, invitationservice.CreateInput{Email: "revoked@example.com", Role: domain.RoleMember})
+	if err != nil {
+		t.Fatalf("create revocable invitation: %v", err)
+	}
+	revokedRawToken := mailCapture.invitation.Token
+	if err := invitationService.Revoke(ctx, invitationActor, revokedInvitation.ID.Hex()); err != nil {
+		t.Fatalf("revoke invitation: %v", err)
+	}
+	if _, err := invitationService.Accept(ctx, revokedRawToken, invitationservice.AcceptInput{DisplayName: "Revoked Member", Password: "a-secure-password"}); !errors.Is(err, invitationservice.ErrInvalidInvitation) {
+		t.Fatalf("expected revoked invitation to fail, got %v", err)
+	}
+	expiredRawToken, expiredHash, err := refreshManager.Generate()
+	if err != nil {
+		t.Fatalf("generate expired invitation token: %v", err)
+	}
+	if _, err := repositories.Invitations.Create(ctx, domain.Invitation{
+		OrganizationID: registered.Organization.ID, Email: "expired@example.com", Role: domain.RoleMember,
+		Status: domain.InvitationPending, TokenHash: expiredHash, InvitedBy: registered.User.ID,
+		ExpiresAt: now.Add(-time.Hour), CreatedAt: now.Add(-2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("create expired invitation: %v", err)
+	}
+	if _, err := invitationService.Accept(ctx, expiredRawToken, invitationservice.AcceptInput{DisplayName: "Expired Member", Password: "a-secure-password"}); !errors.Is(err, invitationservice.ErrInvalidInvitation) {
+		t.Fatalf("expected expired invitation to fail, got %v", err)
+	}
 	updatedOrganization, err := organizationService.UpdateName(ctx, ownerActor, "Renamed Company")
 	if err != nil || updatedOrganization.Name != "Renamed Company" {
 		t.Fatalf("update organization name: %v, organization: %+v", err, updatedOrganization)

@@ -8,6 +8,8 @@ import (
 	"golang-auth/configs"
 	"golang-auth/internal/auth"
 	"golang-auth/internal/httpapi"
+	"golang-auth/internal/invitation"
+	"golang-auth/internal/mailer"
 	"golang-auth/internal/organization"
 	"golang-auth/internal/password"
 	mongostore "golang-auth/internal/store/mongo"
@@ -53,11 +55,17 @@ func New(cfg configs.Config) (*App, error) {
 	refreshManager := token.NewRefreshManager()
 	authService := auth.NewService(store.Users, store.Organizations, store.Memberships, store.Sessions, passwordHasher, tokenSigner, refreshManager, cfg.RefreshTokenTTL)
 	organizationService := organization.NewService(store.Users, store.Organizations, store.Memberships, store.Sessions)
+	developmentMailer, err := mailer.NewDevelopment(cfg.Environment, cfg.ApplicationBaseURL)
+	if err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("configure invitation mailer: %w", err)
+	}
+	invitationService := invitation.NewService(store.Users, store.Organizations, store.Memberships, store.Invitations, passwordHasher, refreshManager, developmentMailer, cfg.InvitationTokenTTL)
 
 	server := echo.New()
 	server.HideBanner = true
 	registerHealthRoutes(server, client)
-	httpapi.NewHandler(authService, tokenSigner, cfg.AccessTokenTTL, organizationService).RegisterRoutes(server)
+	httpapi.NewHandler(authService, tokenSigner, cfg.AccessTokenTTL, organizationService).WithInvitationService(invitationService).RegisterRoutes(server)
 
 	return &App{server: server, mongo: client}, nil
 }
