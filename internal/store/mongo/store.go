@@ -124,6 +124,24 @@ func (r *UserRepository) ByEmail(ctx context.Context, email string) (domain.User
 	return r.findOne(ctx, bson.M{"email": email})
 }
 
+func (r *UserRepository) ByIDs(ctx context.Context, ids []bson.ObjectID) ([]domain.User, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	if len(ids) == 0 {
+		return []domain.User{}, nil
+	}
+	cursor, err := r.collection.Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
+	if err != nil {
+		return nil, fmt.Errorf("find users: %w", err)
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	var users []domain.User
+	if err := cursor.All(ctx, &users); err != nil {
+		return nil, fmt.Errorf("decode users: %w", err)
+	}
+	return users, nil
+}
+
 func (r *UserRepository) Delete(ctx context.Context, id bson.ObjectID) error {
 	return deleteByID(ctx, r.collection, r.timeout, id, "user")
 }
@@ -161,6 +179,17 @@ func (r *OrganizationRepository) ByID(ctx context.Context, id bson.ObjectID) (do
 
 func (r *OrganizationRepository) BySlug(ctx context.Context, slug string) (domain.Organization, error) {
 	return r.findOne(ctx, bson.M{"slug": slug})
+}
+
+func (r *OrganizationRepository) UpdateName(ctx context.Context, id bson.ObjectID, name string, updatedAt time.Time) (domain.Organization, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	var organization domain.Organization
+	result := r.collection.FindOneAndUpdate(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"name": name, "updatedAt": updatedAt}}, options.FindOneAndUpdate().SetReturnDocument(options.After))
+	if err := result.Decode(&organization); err != nil {
+		return organization, repositoryError("update organization", err)
+	}
+	return organization, nil
 }
 
 func (r *OrganizationRepository) Delete(ctx context.Context, id bson.ObjectID) error {
@@ -201,6 +230,57 @@ func (r *MembershipRepository) ByUserAndOrganization(ctx context.Context, userID
 	err := r.collection.FindOne(ctx, bson.M{"userId": userID, "organizationId": organizationID}).Decode(&membership)
 	if err != nil {
 		return membership, repositoryError("find membership", err)
+	}
+	return membership, nil
+}
+
+func (r *MembershipRepository) ByIDForOrganization(ctx context.Context, id, organizationID bson.ObjectID) (domain.Membership, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	var membership domain.Membership
+	if err := r.collection.FindOne(ctx, bson.M{"_id": id, "organizationId": organizationID}).Decode(&membership); err != nil {
+		return membership, repositoryError("find membership", err)
+	}
+	return membership, nil
+}
+
+func (r *MembershipRepository) ListForOrganization(ctx context.Context, organizationID, after bson.ObjectID, limit int64) ([]domain.Membership, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{"organizationId": organizationID}
+	if !after.IsZero() {
+		filter["_id"] = bson.M{"$gt": after}
+	}
+	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list memberships: %w", err)
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	var memberships []domain.Membership
+	if err := cursor.All(ctx, &memberships); err != nil {
+		return nil, fmt.Errorf("decode memberships: %w", err)
+	}
+	return memberships, nil
+}
+
+func (r *MembershipRepository) CountActiveOwners(ctx context.Context, organizationID bson.ObjectID) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	count, err := r.collection.CountDocuments(ctx, bson.M{"organizationId": organizationID, "role": domain.RoleOwner, "state": domain.MembershipActive})
+	if err != nil {
+		return 0, fmt.Errorf("count active owners: %w", err)
+	}
+	return count, nil
+}
+
+func (r *MembershipRepository) Update(ctx context.Context, id bson.ObjectID, role domain.Role, state domain.MembershipState, updatedAt time.Time) (domain.Membership, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	var membership domain.Membership
+	update := bson.M{"$set": bson.M{"role": role, "state": state, "updatedAt": updatedAt}}
+	result := r.collection.FindOneAndUpdate(ctx, bson.M{"_id": id}, update, options.FindOneAndUpdate().SetReturnDocument(options.After))
+	if err := result.Decode(&membership); err != nil {
+		return membership, repositoryError("update membership", err)
 	}
 	return membership, nil
 }

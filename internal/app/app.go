@@ -8,6 +8,7 @@ import (
 	"golang-auth/configs"
 	"golang-auth/internal/auth"
 	"golang-auth/internal/httpapi"
+	"golang-auth/internal/organization"
 	"golang-auth/internal/password"
 	mongostore "golang-auth/internal/store/mongo"
 	"golang-auth/internal/token"
@@ -51,11 +52,12 @@ func New(cfg configs.Config) (*App, error) {
 	}
 	refreshManager := token.NewRefreshManager()
 	authService := auth.NewService(store.Users, store.Organizations, store.Memberships, store.Sessions, passwordHasher, tokenSigner, refreshManager, cfg.RefreshTokenTTL)
+	organizationService := organization.NewService(store.Users, store.Organizations, store.Memberships, store.Sessions)
 
 	server := echo.New()
 	server.HideBanner = true
 	registerHealthRoutes(server, client)
-	httpapi.NewHandler(authService, tokenSigner, cfg.AccessTokenTTL).RegisterRoutes(server)
+	httpapi.NewHandler(authService, tokenSigner, cfg.AccessTokenTTL, organizationService).RegisterRoutes(server)
 
 	return &App{server: server, mongo: client}, nil
 }
