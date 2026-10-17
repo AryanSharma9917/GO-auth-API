@@ -83,7 +83,7 @@ func (s *Store) EnsureIndexes(ctx context.Context) error {
 		},
 		invitationsCollection: {
 			{Keys: bson.D{{Key: "tokenHash", Value: 1}}, Options: options.Index().SetUnique(true).SetName("invitations_token_hash_unique")},
-			{Keys: bson.D{{Key: "organizationId", Value: 1}, {Key: "email", Value: 1}}, Options: options.Index().SetName("invitations_organization_email")},
+			{Keys: bson.D{{Key: "organizationId", Value: 1}, {Key: "email", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"status": domain.InvitationPending}).SetName("invitations_pending_organization_email_unique")},
 			{Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0).SetName("invitations_expiry_ttl")},
 		},
 		auditEventsCollection: {
@@ -412,6 +412,93 @@ func (r *InvitationRepository) ByTokenHash(ctx context.Context, hash string) (do
 		return invitation, repositoryError("find invitation", err)
 	}
 	return invitation, nil
+}
+
+func (r *InvitationRepository) ByIDForOrganization(ctx context.Context, id, organizationID bson.ObjectID) (domain.Invitation, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	var invitation domain.Invitation
+	if err := r.collection.FindOne(ctx, bson.M{"_id": id, "organizationId": organizationID}).Decode(&invitation); err != nil {
+		return invitation, repositoryError("find invitation", err)
+	}
+	return invitation, nil
+}
+
+func (r *InvitationRepository) ListForOrganization(ctx context.Context, organizationID, after bson.ObjectID, limit int64) ([]domain.Invitation, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{"organizationId": organizationID}
+	if !after.IsZero() {
+		filter["_id"] = bson.M{"$gt": after}
+	}
+	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list invitations: %w", err)
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	var invitations []domain.Invitation
+	if err := cursor.All(ctx, &invitations); err != nil {
+		return nil, fmt.Errorf("decode invitations: %w", err)
+	}
+	return invitations, nil
+}
+
+func (r *InvitationRepository) Claim(ctx context.Context, hash string, claimedAt time.Time) (domain.Invitation, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{
+		"tokenHash": hash, "expiresAt": bson.M{"$gt": claimedAt},
+		"status": domain.InvitationPending,
+		"$or": bson.A{
+			bson.M{"claimedAt": bson.M{"$exists": false}},
+			bson.M{"claimedAt": bson.M{"$lt": claimedAt.Add(-5 * time.Minute)}},
+		},
+	}
+	var invitation domain.Invitation
+	result := r.collection.FindOneAndUpdate(ctx, filter, bson.M{"$set": bson.M{"claimedAt": claimedAt}}, options.FindOneAndUpdate().SetReturnDocument(options.After))
+	if err := result.Decode(&invitation); err != nil {
+		return invitation, repositoryError("claim invitation", err)
+	}
+	return invitation, nil
+}
+
+func (r *InvitationRepository) Complete(ctx context.Context, id bson.ObjectID, acceptedAt time.Time) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{"_id": id, "claimedAt": bson.M{"$exists": true}, "status": domain.InvitationPending}
+	update := bson.M{"$set": bson.M{"acceptedAt": acceptedAt, "status": domain.InvitationAccepted}, "$unset": bson.M{"claimedAt": ""}}
+	result, err := r.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("complete invitation: %w", err)
+	}
+	if result.ModifiedCount != 1 {
+		return fmt.Errorf("complete invitation: %w", basestore.ErrConflict)
+	}
+	return nil
+}
+
+func (r *InvitationRepository) Release(ctx context.Context, id bson.ObjectID) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	if _, err := r.collection.UpdateOne(ctx, bson.M{"_id": id, "status": domain.InvitationPending}, bson.M{"$unset": bson.M{"claimedAt": ""}}); err != nil {
+		return fmt.Errorf("release invitation: %w", err)
+	}
+	return nil
+}
+
+func (r *InvitationRepository) Revoke(ctx context.Context, id bson.ObjectID, revokedAt time.Time) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{"_id": id, "status": domain.InvitationPending}
+	update := bson.M{"$set": bson.M{"revokedAt": revokedAt, "status": domain.InvitationRevoked}, "$unset": bson.M{"claimedAt": ""}}
+	result, err := r.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("revoke invitation: %w", err)
+	}
+	if result.MatchedCount != 1 {
+		return fmt.Errorf("revoke invitation: %w", basestore.ErrNotFound)
+	}
+	return nil
 }
 
 type AuditRepository struct {

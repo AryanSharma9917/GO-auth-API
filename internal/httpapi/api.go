@@ -12,6 +12,7 @@ import (
 
 	"golang-auth/internal/auth"
 	"golang-auth/internal/domain"
+	"golang-auth/internal/invitation"
 	"golang-auth/internal/organization"
 	"golang-auth/internal/token"
 
@@ -42,11 +43,19 @@ type OrganizationService interface {
 	RemoveMember(context.Context, organization.Actor, string) error
 }
 
+type InvitationService interface {
+	Create(context.Context, invitation.Actor, invitation.CreateInput) (domain.Invitation, error)
+	List(context.Context, invitation.Actor, string, int) (invitation.Page, error)
+	Revoke(context.Context, invitation.Actor, string) error
+	Accept(context.Context, string, invitation.AcceptInput) (invitation.Acceptance, error)
+}
+
 type Handler struct {
 	authService    AuthService
 	tokens         TokenParser
 	accessTokenTTL time.Duration
 	organizations  OrganizationService
+	invitations    InvitationService
 }
 
 type Principal struct {
@@ -81,6 +90,16 @@ type updateOrganizationRequest struct {
 type updateMemberRequest struct {
 	Role  *domain.Role            `json:"role"`
 	State *domain.MembershipState `json:"state"`
+}
+
+type createInvitationRequest struct {
+	Email string      `json:"email"`
+	Role  domain.Role `json:"role"`
+}
+
+type acceptInvitationRequest struct {
+	DisplayName string `json:"display_name"`
+	Password    string `json:"password"`
 }
 
 type authResponse struct {
@@ -129,6 +148,15 @@ type memberResponse struct {
 	User       userResponse       `json:"user"`
 }
 
+type invitationResponse struct {
+	ID        string      `json:"id"`
+	Email     string      `json:"email"`
+	Role      domain.Role `json:"role"`
+	Status    string      `json:"status"`
+	ExpiresAt time.Time   `json:"expires_at"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
 type errorEnvelope struct {
 	Error apiError `json:"error"`
 }
@@ -146,6 +174,11 @@ func NewHandler(authService AuthService, tokens TokenParser, accessTokenTTL time
 	return handler
 }
 
+func (h *Handler) WithInvitationService(service InvitationService) *Handler {
+	h.invitations = service
+	return h
+}
+
 func (h *Handler) RegisterRoutes(server *echo.Echo) {
 	server.POST("/api/v1/organizations/register", h.register)
 	server.POST("/api/v1/auth/login", h.login)
@@ -161,6 +194,12 @@ func (h *Handler) RegisterRoutes(server *echo.Echo) {
 		server.GET("/api/v1/organizations/current/members", h.members, h.authenticate)
 		server.PATCH("/api/v1/organizations/current/members/:memberId", h.updateMember, h.authenticate)
 		server.DELETE("/api/v1/organizations/current/members/:memberId", h.removeMember, h.authenticate)
+	}
+	if h.invitations != nil {
+		server.POST("/api/v1/organizations/current/invitations", h.createInvitation, h.authenticate)
+		server.GET("/api/v1/organizations/current/invitations", h.invitationsList, h.authenticate)
+		server.DELETE("/api/v1/organizations/current/invitations/:invitationId", h.revokeInvitation, h.authenticate)
+		server.POST("/api/v1/invitations/:token/accept", h.acceptInvitation)
 	}
 }
 
@@ -321,6 +360,65 @@ func (h *Handler) removeMember(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+func (h *Handler) createInvitation(c echo.Context) error {
+	var request createInvitationRequest
+	if err := decodeJSON(c, &request); err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain one valid JSON object")
+	}
+	principal, _ := PrincipalFromContext(c)
+	value, err := h.invitations.Create(c.Request().Context(), invitationActor(principal), invitation.CreateInput{Email: request.Email, Role: request.Role})
+	if err != nil {
+		return h.writeInvitationError(c, err)
+	}
+	return c.JSON(http.StatusCreated, invitationResponseFromDomain(value, time.Now().UTC()))
+}
+
+func (h *Handler) invitationsList(c echo.Context) error {
+	limit := 0
+	if value := c.QueryParam("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return writeError(c, http.StatusUnprocessableEntity, "validation_failed", "The pagination limit is invalid")
+		}
+		limit = parsed
+	}
+	principal, _ := PrincipalFromContext(c)
+	page, err := h.invitations.List(c.Request().Context(), invitationActor(principal), c.QueryParam("cursor"), limit)
+	if err != nil {
+		return h.writeInvitationError(c, err)
+	}
+	items := make([]invitationResponse, 0, len(page.Invitations))
+	now := time.Now().UTC()
+	for _, value := range page.Invitations {
+		items = append(items, invitationResponseFromDomain(value, now))
+	}
+	return c.JSON(http.StatusOK, map[string]any{"invitations": items, "next_cursor": page.NextCursor})
+}
+
+func (h *Handler) revokeInvitation(c echo.Context) error {
+	principal, _ := PrincipalFromContext(c)
+	if err := h.invitations.Revoke(c.Request().Context(), invitationActor(principal), c.Param("invitationId")); err != nil {
+		return h.writeInvitationError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+func (h *Handler) acceptInvitation(c echo.Context) error {
+	var request acceptInvitationRequest
+	if err := decodeJSON(c, &request); err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain one valid JSON object")
+	}
+	accepted, err := h.invitations.Accept(c.Request().Context(), c.Param("token"), invitation.AcceptInput{DisplayName: request.DisplayName, Password: request.Password})
+	if err != nil {
+		return h.writeInvitationError(c, err)
+	}
+	return c.JSON(http.StatusCreated, map[string]any{
+		"user":         userResponse{ID: accepted.User.ID.Hex(), Email: accepted.User.Email, DisplayName: accepted.User.DisplayName, EmailVerified: accepted.User.EmailVerified},
+		"organization": organizationResponse{ID: accepted.Organization.ID.Hex(), Name: accepted.Organization.Name, Slug: accepted.Organization.Slug},
+		"membership":   membershipResponseFromDomain(accepted.Membership),
+	})
+}
+
 func (h *Handler) me(c echo.Context) error {
 	principal, ok := PrincipalFromContext(c)
 	if !ok {
@@ -396,6 +494,23 @@ func (h *Handler) writeOrganizationError(c echo.Context, err error) error {
 	}
 }
 
+func (h *Handler) writeInvitationError(c echo.Context, err error) error {
+	switch {
+	case errors.Is(err, invitation.ErrInvalidInput):
+		return writeError(c, http.StatusUnprocessableEntity, "validation_failed", "One or more fields are invalid")
+	case errors.Is(err, invitation.ErrForbidden):
+		return writeError(c, http.StatusForbidden, "forbidden", "You do not have permission to manage invitations")
+	case errors.Is(err, invitation.ErrConflict):
+		return writeError(c, http.StatusConflict, "invitation_conflict", "A pending invitation or membership already exists")
+	case errors.Is(err, invitation.ErrNotFound):
+		return writeError(c, http.StatusNotFound, "invitation_not_found", "The invitation was not found")
+	case errors.Is(err, invitation.ErrInvalidInvitation):
+		return writeError(c, http.StatusUnauthorized, "invalid_invitation", "The invitation is invalid or expired")
+	default:
+		return writeError(c, http.StatusInternalServerError, "internal_error", "An unexpected error occurred")
+	}
+}
+
 func writeError(c echo.Context, status int, code, message string) error {
 	return c.JSON(status, errorEnvelope{Error: apiError{Code: code, Message: message}})
 }
@@ -440,4 +555,16 @@ func memberResponseFromDomain(member organization.Member) memberResponse {
 		Membership: membershipResponseFromDomain(member.Membership),
 		User:       userResponse{ID: member.User.ID.Hex(), Email: member.User.Email, DisplayName: member.User.DisplayName, EmailVerified: member.User.EmailVerified},
 	}
+}
+
+func invitationActor(principal Principal) invitation.Actor {
+	return invitation.Actor{UserID: principal.UserID, OrganizationID: principal.OrganizationID}
+}
+
+func invitationResponseFromDomain(value domain.Invitation, now time.Time) invitationResponse {
+	status := value.Status
+	if status == domain.InvitationPending && !value.ExpiresAt.After(now) {
+		status = "expired"
+	}
+	return invitationResponse{ID: value.ID.Hex(), Email: value.Email, Role: value.Role, Status: status, ExpiresAt: value.ExpiresAt, CreatedAt: value.CreatedAt}
 }

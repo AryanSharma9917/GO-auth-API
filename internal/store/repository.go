@@ -52,6 +52,12 @@ type SessionRepository interface {
 type InvitationRepository interface {
 	Create(context.Context, domain.Invitation) (domain.Invitation, error)
 	ByTokenHash(context.Context, string) (domain.Invitation, error)
+	ByIDForOrganization(context.Context, bson.ObjectID, bson.ObjectID) (domain.Invitation, error)
+	ListForOrganization(context.Context, bson.ObjectID, bson.ObjectID, int64) ([]domain.Invitation, error)
+	Claim(context.Context, string, time.Time) (domain.Invitation, error)
+	Complete(context.Context, bson.ObjectID, time.Time) error
+	Release(context.Context, bson.ObjectID) error
+	Revoke(context.Context, bson.ObjectID, time.Time) error
 }
 
 type AuditRepository interface {

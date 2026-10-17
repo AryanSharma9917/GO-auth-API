@@ -14,6 +14,8 @@ services:
       JWT_AUDIENCE: go-auth-clients
       PASSWORD_BCRYPT_COST: 12
       REFRESH_TOKEN_TTL: 720h
+      INVITATION_TOKEN_TTL: 72h
+      APPLICATION_BASE_URL: http://localhost:3000
     ports:
       - "8080:8080"
     depends_on:

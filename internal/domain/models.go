@@ -71,13 +71,21 @@ type Invitation struct {
 	OrganizationID bson.ObjectID `bson:"organizationId" json:"organizationId"`
 	Email          string        `bson:"email" json:"email"`
 	Role           Role          `bson:"role" json:"role"`
+	Status         string        `bson:"status" json:"status"`
 	TokenHash      string        `bson:"tokenHash" json:"-"`
 	InvitedBy      bson.ObjectID `bson:"invitedBy" json:"invitedBy"`
 	ExpiresAt      time.Time     `bson:"expiresAt" json:"expiresAt"`
 	AcceptedAt     *time.Time    `bson:"acceptedAt,omitempty" json:"acceptedAt,omitempty"`
 	RevokedAt      *time.Time    `bson:"revokedAt,omitempty" json:"revokedAt,omitempty"`
+	ClaimedAt      *time.Time    `bson:"claimedAt,omitempty" json:"-"`
 	CreatedAt      time.Time     `bson:"createdAt" json:"createdAt"`
 }
+
+const (
+	InvitationPending  = "pending"
+	InvitationAccepted = "accepted"
+	InvitationRevoked  = "revoked"
+)
 
 type AuditEvent struct {
 	ID             bson.ObjectID  `bson:"_id,omitempty" json:"id"`
