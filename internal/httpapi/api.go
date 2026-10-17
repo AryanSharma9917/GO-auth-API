@@ -203,8 +203,9 @@ type errorEnvelope struct {
 }
 
 type apiError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 func NewHandler(authService AuthService, tokens TokenParser, accessTokenTTL time.Duration, organizations ...OrganizationService) *Handler {
@@ -664,7 +665,11 @@ func (h *Handler) writeInvitationError(c echo.Context, err error) error {
 }
 
 func writeError(c echo.Context, status int, code, message string) error {
-	return c.JSON(status, errorEnvelope{Error: apiError{Code: code, Message: message}})
+	requestID := c.Response().Header().Get(echo.HeaderXRequestID)
+	if requestID == "" {
+		requestID = c.Request().Header.Get(echo.HeaderXRequestID)
+	}
+	return c.JSON(status, errorEnvelope{Error: apiError{Code: code, Message: message, RequestID: requestID}})
 }
 
 func writeAuthResponse(c echo.Context, status int, result auth.Result) error {

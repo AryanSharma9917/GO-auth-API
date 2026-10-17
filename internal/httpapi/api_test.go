@@ -111,3 +111,32 @@ func TestAuthenticationMiddleware(t *testing.T) {
 		t.Fatalf("unexpected principal: %+v", principal)
 	}
 }
+
+func TestSensitiveRoutesAreRateLimited(t *testing.T) {
+	server := echo.New()
+	NewHandler(authServiceStub{}, nil, 15*time.Minute).WithSensitiveRateLimit(1).RegisterRoutes(server)
+	body := `{"organization_slug":"example","email":"owner@example.com","password":"a-secure-password"}`
+	first := httptest.NewRecorder()
+	server.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body)))
+	second := httptest.NewRecorder()
+	server.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body)))
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, second.Code)
+	}
+}
+
+func TestErrorIncludesRequestID(t *testing.T) {
+	server := echo.New()
+	server.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			c.Response().Header().Set(echo.HeaderXRequestID, "request-123")
+			return next(c)
+		}
+	})
+	NewHandler(authServiceStub{}, nil, 15*time.Minute).RegisterRoutes(server)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"unknown":true}`)))
+	if !strings.Contains(response.Body.String(), `"request_id":"request-123"`) {
+		t.Fatalf("response does not include request ID: %s", response.Body.String())
+	}
+}
