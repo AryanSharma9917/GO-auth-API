@@ -8,7 +8,7 @@ require (
 	github.com/labstack/echo/v4 v4.16.0
 	go.mongodb.org/mongo-driver/v2 v2.9.2
 	golang.org/x/crypto v0.58.0
-	golang.org/x/time v0.15.0
+	golang.org/x/time v0.16.0
 )
 
 require (
