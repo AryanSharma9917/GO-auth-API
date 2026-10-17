@@ -17,6 +17,7 @@ type UserRepository interface {
 	Create(context.Context, domain.User) (domain.User, error)
 	ByID(context.Context, bson.ObjectID) (domain.User, error)
 	ByEmail(context.Context, string) (domain.User, error)
+	ByIDs(context.Context, []bson.ObjectID) ([]domain.User, error)
 	Delete(context.Context, bson.ObjectID) error
 }
 
@@ -24,12 +25,17 @@ type OrganizationRepository interface {
 	Create(context.Context, domain.Organization) (domain.Organization, error)
 	ByID(context.Context, bson.ObjectID) (domain.Organization, error)
 	BySlug(context.Context, string) (domain.Organization, error)
+	UpdateName(context.Context, bson.ObjectID, string, time.Time) (domain.Organization, error)
 	Delete(context.Context, bson.ObjectID) error
 }
 
 type MembershipRepository interface {
 	Create(context.Context, domain.Membership) (domain.Membership, error)
 	ByUserAndOrganization(context.Context, bson.ObjectID, bson.ObjectID) (domain.Membership, error)
+	ByIDForOrganization(context.Context, bson.ObjectID, bson.ObjectID) (domain.Membership, error)
+	ListForOrganization(context.Context, bson.ObjectID, bson.ObjectID, int64) ([]domain.Membership, error)
+	CountActiveOwners(context.Context, bson.ObjectID) (int64, error)
+	Update(context.Context, bson.ObjectID, domain.Role, domain.MembershipState, time.Time) (domain.Membership, error)
 	Delete(context.Context, bson.ObjectID) error
 }
 

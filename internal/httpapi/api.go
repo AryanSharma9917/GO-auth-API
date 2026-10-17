@@ -6,11 +6,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"golang-auth/internal/auth"
 	"golang-auth/internal/domain"
+	"golang-auth/internal/organization"
 	"golang-auth/internal/token"
 
 	"github.com/labstack/echo/v4"
@@ -32,10 +34,19 @@ type TokenParser interface {
 	Parse(string) (token.Claims, error)
 }
 
+type OrganizationService interface {
+	Current(context.Context, organization.Actor) (domain.Organization, domain.Membership, error)
+	UpdateName(context.Context, organization.Actor, string) (domain.Organization, error)
+	Members(context.Context, organization.Actor, string, int) (organization.MemberPage, error)
+	UpdateMember(context.Context, organization.Actor, string, organization.UpdateMemberInput) (organization.Member, error)
+	RemoveMember(context.Context, organization.Actor, string) error
+}
+
 type Handler struct {
 	authService    AuthService
 	tokens         TokenParser
 	accessTokenTTL time.Duration
+	organizations  OrganizationService
 }
 
 type Principal struct {
@@ -61,6 +72,15 @@ type loginRequest struct {
 
 type refreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token"`
+}
+
+type updateOrganizationRequest struct {
+	Name string `json:"name"`
+}
+
+type updateMemberRequest struct {
+	Role  *domain.Role            `json:"role"`
+	State *domain.MembershipState `json:"state"`
 }
 
 type authResponse struct {
@@ -104,6 +124,11 @@ type sessionResponse struct {
 	LastUsedAt       time.Time  `json:"last_used_at"`
 }
 
+type memberResponse struct {
+	Membership membershipResponse `json:"membership"`
+	User       userResponse       `json:"user"`
+}
+
 type errorEnvelope struct {
 	Error apiError `json:"error"`
 }
@@ -113,8 +138,12 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
-func NewHandler(authService AuthService, tokens TokenParser, accessTokenTTL time.Duration) *Handler {
-	return &Handler{authService: authService, tokens: tokens, accessTokenTTL: accessTokenTTL}
+func NewHandler(authService AuthService, tokens TokenParser, accessTokenTTL time.Duration, organizations ...OrganizationService) *Handler {
+	handler := &Handler{authService: authService, tokens: tokens, accessTokenTTL: accessTokenTTL}
+	if len(organizations) > 0 {
+		handler.organizations = organizations[0]
+	}
+	return handler
 }
 
 func (h *Handler) RegisterRoutes(server *echo.Echo) {
@@ -126,6 +155,13 @@ func (h *Handler) RegisterRoutes(server *echo.Echo) {
 	server.POST("/api/v1/auth/logout-all", h.logoutAll, h.authenticate)
 	server.GET("/api/v1/auth/sessions", h.sessions, h.authenticate)
 	server.DELETE("/api/v1/auth/sessions/:sessionId", h.revokeSession, h.authenticate)
+	if h.organizations != nil {
+		server.GET("/api/v1/organizations/current", h.currentOrganization, h.authenticate)
+		server.PATCH("/api/v1/organizations/current", h.updateOrganization, h.authenticate)
+		server.GET("/api/v1/organizations/current/members", h.members, h.authenticate)
+		server.PATCH("/api/v1/organizations/current/members/:memberId", h.updateMember, h.authenticate)
+		server.DELETE("/api/v1/organizations/current/members/:memberId", h.removeMember, h.authenticate)
+	}
 }
 
 func (h *Handler) register(c echo.Context) error {
@@ -218,6 +254,73 @@ func (h *Handler) revokeSession(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+func (h *Handler) currentOrganization(c echo.Context) error {
+	principal, _ := PrincipalFromContext(c)
+	organizationValue, membership, err := h.organizations.Current(c.Request().Context(), actorFromPrincipal(principal))
+	if err != nil {
+		return h.writeOrganizationError(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{
+		"organization": organizationResponse{ID: organizationValue.ID.Hex(), Name: organizationValue.Name, Slug: organizationValue.Slug},
+		"membership":   membershipResponseFromDomain(membership),
+	})
+}
+
+func (h *Handler) updateOrganization(c echo.Context) error {
+	var request updateOrganizationRequest
+	if err := decodeJSON(c, &request); err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain one valid JSON object")
+	}
+	principal, _ := PrincipalFromContext(c)
+	organizationValue, err := h.organizations.UpdateName(c.Request().Context(), actorFromPrincipal(principal), request.Name)
+	if err != nil {
+		return h.writeOrganizationError(c, err)
+	}
+	return c.JSON(http.StatusOK, organizationResponse{ID: organizationValue.ID.Hex(), Name: organizationValue.Name, Slug: organizationValue.Slug})
+}
+
+func (h *Handler) members(c echo.Context) error {
+	limit := 0
+	if value := c.QueryParam("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return writeError(c, http.StatusUnprocessableEntity, "validation_failed", "The pagination limit is invalid")
+		}
+		limit = parsed
+	}
+	principal, _ := PrincipalFromContext(c)
+	page, err := h.organizations.Members(c.Request().Context(), actorFromPrincipal(principal), c.QueryParam("cursor"), limit)
+	if err != nil {
+		return h.writeOrganizationError(c, err)
+	}
+	members := make([]memberResponse, 0, len(page.Members))
+	for _, member := range page.Members {
+		members = append(members, memberResponseFromDomain(member))
+	}
+	return c.JSON(http.StatusOK, map[string]any{"members": members, "next_cursor": page.NextCursor})
+}
+
+func (h *Handler) updateMember(c echo.Context) error {
+	var request updateMemberRequest
+	if err := decodeJSON(c, &request); err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", "Request body must contain one valid JSON object")
+	}
+	principal, _ := PrincipalFromContext(c)
+	member, err := h.organizations.UpdateMember(c.Request().Context(), actorFromPrincipal(principal), c.Param("memberId"), organization.UpdateMemberInput{Role: request.Role, State: request.State})
+	if err != nil {
+		return h.writeOrganizationError(c, err)
+	}
+	return c.JSON(http.StatusOK, memberResponseFromDomain(member))
+}
+
+func (h *Handler) removeMember(c echo.Context) error {
+	principal, _ := PrincipalFromContext(c)
+	if err := h.organizations.RemoveMember(c.Request().Context(), actorFromPrincipal(principal), c.Param("memberId")); err != nil {
+		return h.writeOrganizationError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 func (h *Handler) me(c echo.Context) error {
 	principal, ok := PrincipalFromContext(c)
 	if !ok {
@@ -278,6 +381,21 @@ func (h *Handler) writeAuthError(c echo.Context, err error) error {
 	}
 }
 
+func (h *Handler) writeOrganizationError(c echo.Context, err error) error {
+	switch {
+	case errors.Is(err, organization.ErrInvalidInput):
+		return writeError(c, http.StatusUnprocessableEntity, "validation_failed", "One or more fields are invalid")
+	case errors.Is(err, organization.ErrForbidden):
+		return writeError(c, http.StatusForbidden, "forbidden", "You do not have permission to perform this operation")
+	case errors.Is(err, organization.ErrNotFound):
+		return writeError(c, http.StatusNotFound, "member_not_found", "The organization member was not found")
+	case errors.Is(err, organization.ErrLastOwner):
+		return writeError(c, http.StatusConflict, "last_owner", "The organization must retain at least one active owner")
+	default:
+		return writeError(c, http.StatusInternalServerError, "internal_error", "An unexpected error occurred")
+	}
+}
+
 func writeError(c echo.Context, status int, code, message string) error {
 	return c.JSON(status, errorEnvelope{Error: apiError{Code: code, Message: message}})
 }
@@ -306,5 +424,20 @@ func sessionResponseFromDomain(session domain.Session) sessionResponse {
 		ID: session.ID.Hex(), IPAddress: session.IPAddress, UserAgent: session.UserAgent,
 		ExpiresAt: session.ExpiresAt, RevokedAt: session.RevokedAt, RevocationReason: session.RevocationReason,
 		CreatedAt: session.CreatedAt, LastUsedAt: session.LastUsedAt,
+	}
+}
+
+func actorFromPrincipal(principal Principal) organization.Actor {
+	return organization.Actor{UserID: principal.UserID, OrganizationID: principal.OrganizationID}
+}
+
+func membershipResponseFromDomain(membership domain.Membership) membershipResponse {
+	return membershipResponse{ID: membership.ID.Hex(), Role: membership.Role, State: string(membership.State)}
+}
+
+func memberResponseFromDomain(member organization.Member) memberResponse {
+	return memberResponse{
+		Membership: membershipResponseFromDomain(member.Membership),
+		User:       userResponse{ID: member.User.ID.Hex(), Email: member.User.Email, DisplayName: member.User.DisplayName, EmailVerified: member.User.EmailVerified},
 	}
 }

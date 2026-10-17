@@ -9,6 +9,7 @@ import (
 
 	"golang-auth/internal/auth"
 	"golang-auth/internal/domain"
+	organizationservice "golang-auth/internal/organization"
 	"golang-auth/internal/password"
 	basestore "golang-auth/internal/store"
 	mongostore "golang-auth/internal/store/mongo"
@@ -130,6 +131,57 @@ func TestStoreIndexesAndUniqueness(t *testing.T) {
 	}
 	if _, err := authService.Refresh(ctx, loggedIn.RefreshToken, 15*time.Minute); !errors.Is(err, auth.ErrInvalidRefreshToken) {
 		t.Fatalf("expected logged-out refresh token to be invalid, got %v", err)
+	}
+
+	organizationService := organizationservice.NewService(repositories.Users, repositories.Organizations, repositories.Memberships, repositories.Sessions)
+	ownerActor := organizationservice.Actor{UserID: registered.User.ID.Hex(), OrganizationID: registered.Organization.ID.Hex()}
+	updatedOrganization, err := organizationService.UpdateName(ctx, ownerActor, "Renamed Company")
+	if err != nil || updatedOrganization.Name != "Renamed Company" {
+		t.Fatalf("update organization name: %v, organization: %+v", err, updatedOrganization)
+	}
+	memberUser, err := repositories.Users.Create(ctx, domain.User{
+		Email: "member@example.com", DisplayName: "Member", PasswordHash: "not-a-real-password-hash", CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create member user: %v", err)
+	}
+	memberMembership, err := repositories.Memberships.Create(ctx, domain.Membership{
+		OrganizationID: registered.Organization.ID, UserID: memberUser.ID, Role: domain.RoleMember,
+		State: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create member membership: %v", err)
+	}
+	page, err := organizationService.Members(ctx, ownerActor, "", 1)
+	if err != nil {
+		t.Fatalf("list organization members: %v", err)
+	}
+	if len(page.Members) != 1 || page.NextCursor == "" {
+		t.Fatalf("expected a one-member page with a next cursor: %+v", page)
+	}
+	memberRole := domain.RoleMember
+	if _, err := organizationService.UpdateMember(ctx, ownerActor, registered.Membership.ID.Hex(), organizationservice.UpdateMemberInput{Role: &memberRole}); !errors.Is(err, organizationservice.ErrLastOwner) {
+		t.Fatalf("expected final owner demotion to fail, got %v", err)
+	}
+	otherMembership, err := repositories.Memberships.Create(ctx, domain.Membership{
+		OrganizationID: bson.NewObjectID(), UserID: bson.NewObjectID(), Role: domain.RoleMember,
+		State: domain.MembershipActive, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create other organization membership: %v", err)
+	}
+	if err := organizationService.RemoveMember(ctx, ownerActor, otherMembership.ID.Hex()); !errors.Is(err, organizationservice.ErrNotFound) {
+		t.Fatalf("expected cross-organization member to remain hidden, got %v", err)
+	}
+	ownerRole := domain.RoleOwner
+	if _, err := organizationService.UpdateMember(ctx, ownerActor, memberMembership.ID.Hex(), organizationservice.UpdateMemberInput{Role: &ownerRole}); err != nil {
+		t.Fatalf("promote second owner: %v", err)
+	}
+	if _, err := organizationService.UpdateMember(ctx, ownerActor, registered.Membership.ID.Hex(), organizationservice.UpdateMemberInput{Role: &memberRole}); err != nil {
+		t.Fatalf("demote owner after adding replacement: %v", err)
+	}
+	if err := organizationService.RemoveMember(ctx, ownerActor, memberMembership.ID.Hex()); !errors.Is(err, organizationservice.ErrForbidden) {
+		t.Fatalf("expected demoted actor to lose authorization immediately, got %v", err)
 	}
 }
 

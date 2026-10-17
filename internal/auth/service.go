@@ -41,10 +41,30 @@ type RefreshTokenManager interface {
 	Hash(string) string
 }
 
+type UserRepository interface {
+	Create(context.Context, domain.User) (domain.User, error)
+	ByID(context.Context, bson.ObjectID) (domain.User, error)
+	ByEmail(context.Context, string) (domain.User, error)
+	Delete(context.Context, bson.ObjectID) error
+}
+
+type OrganizationRepository interface {
+	Create(context.Context, domain.Organization) (domain.Organization, error)
+	ByID(context.Context, bson.ObjectID) (domain.Organization, error)
+	BySlug(context.Context, string) (domain.Organization, error)
+	Delete(context.Context, bson.ObjectID) error
+}
+
+type MembershipRepository interface {
+	Create(context.Context, domain.Membership) (domain.Membership, error)
+	ByUserAndOrganization(context.Context, bson.ObjectID, bson.ObjectID) (domain.Membership, error)
+	Delete(context.Context, bson.ObjectID) error
+}
+
 type Service struct {
-	users         store.UserRepository
-	organizations store.OrganizationRepository
-	memberships   store.MembershipRepository
+	users         UserRepository
+	organizations OrganizationRepository
+	memberships   MembershipRepository
 	sessions      store.SessionRepository
 	passwords     PasswordHasher
 	tokens        AccessTokenIssuer
@@ -82,7 +102,7 @@ type Result struct {
 	Session          domain.Session
 }
 
-func NewService(users store.UserRepository, organizations store.OrganizationRepository, memberships store.MembershipRepository, sessions store.SessionRepository, passwords PasswordHasher, tokens AccessTokenIssuer, refreshTokens RefreshTokenManager, refreshTTL time.Duration) *Service {
+func NewService(users UserRepository, organizations OrganizationRepository, memberships MembershipRepository, sessions store.SessionRepository, passwords PasswordHasher, tokens AccessTokenIssuer, refreshTokens RefreshTokenManager, refreshTTL time.Duration) *Service {
 	return &Service{users: users, organizations: organizations, memberships: memberships, sessions: sessions, passwords: passwords, tokens: tokens, refreshTokens: refreshTokens, refreshTTL: refreshTTL, now: time.Now}
 }
 
