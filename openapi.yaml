@@ -2,59 +2,234 @@ openapi: 3.1.0
 info:
   title: Go Auth API
   version: 1.0.0
-  description: Multi-tenant authentication, sessions, members, invitations, recovery, and audit events.
+  description: Multi-tenant authentication, session, membership, invitation, recovery, and audit API.
 servers:
   - url: http://localhost:8080
+tags:
+  - {name: Authentication}
+  - {name: Organizations}
+  - {name: Operations}
 paths:
   /api/v1/organizations/register:
     post:
-      summary: Register an organization and owner
-      responses: {'201': {description: Registered}, '422': {$ref: '#/components/responses/Error'}}
+      tags: [Organizations]
+      summary: Create an organization and its owner
+      requestBody: {$ref: '#/components/requestBodies/Register'}
+      responses: {'201': {$ref: '#/components/responses/Auth'}, '409': {$ref: '#/components/responses/Error'}, '422': {$ref: '#/components/responses/Error'}}
   /api/v1/auth/login:
     post:
-      summary: Log in
-      responses: {'200': {description: Authenticated}, '401': {$ref: '#/components/responses/Error'}}
+      tags: [Authentication]
+      summary: Authenticate with email and password
+      requestBody: {$ref: '#/components/requestBodies/Login'}
+      responses: {'200': {$ref: '#/components/responses/Auth'}, '401': {$ref: '#/components/responses/Error'}}
   /api/v1/auth/refresh:
     post:
+      tags: [Authentication]
       summary: Rotate a refresh token
-      responses: {'200': {description: Rotated}, '401': {$ref: '#/components/responses/Error'}}
+      requestBody: {$ref: '#/components/requestBodies/Refresh'}
+      responses: {'200': {$ref: '#/components/responses/Auth'}, '401': {$ref: '#/components/responses/Error'}}
   /api/v1/auth/logout:
-    post: {summary: Revoke a refresh session, responses: {'204': {description: Logged out}}}
+    post:
+      tags: [Authentication]
+      summary: Revoke one refresh session
+      requestBody: {$ref: '#/components/requestBodies/Refresh'}
+      responses: {'204': {description: Session revoked}}
+  /api/v1/auth/logout-all:
+    post:
+      tags: [Authentication]
+      summary: Revoke all sessions in the current organization
+      security: [{bearerAuth: []}]
+      responses: {'204': {description: Sessions revoked}, '401': {$ref: '#/components/responses/Error'}}
+  /api/v1/auth/me:
+    get:
+      tags: [Authentication]
+      summary: Return the authenticated principal
+      security: [{bearerAuth: []}]
+      responses: {'200': {description: Principal, content: {application/json: {schema: {$ref: '#/components/schemas/Principal'}}}}, '401': {$ref: '#/components/responses/Error'}}
+  /api/v1/auth/sessions:
+    get:
+      tags: [Authentication]
+      summary: List the current user's organization sessions
+      security: [{bearerAuth: []}]
+      responses: {'200': {description: Sessions, content: {application/json: {schema: {type: object, properties: {sessions: {type: array, items: {$ref: '#/components/schemas/Session'}}}}}}}, '401': {$ref: '#/components/responses/Error'}}
+  /api/v1/auth/sessions/{sessionId}:
+    delete:
+      tags: [Authentication]
+      summary: Revoke a session
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/SessionId'}]
+      responses: {'204': {description: Session revoked}, '404': {$ref: '#/components/responses/Error'}}
   /api/v1/auth/password/reset-request:
-    post: {summary: Request reset instructions, responses: {'202': {description: Accepted}}}
+    post:
+      tags: [Authentication]
+      summary: Request password-reset instructions
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email], properties: {email: {type: string, format: email}}}}}}
+      responses: {'202': {description: Request accepted regardless of account existence}}
   /api/v1/auth/password/reset-confirm:
-    post: {summary: Reset a password, responses: {'204': {description: Reset}}}
+    post:
+      tags: [Authentication]
+      summary: Reset a password using a single-use token
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [token, new_password], properties: {token: {type: string}, new_password: {$ref: '#/components/schemas/Password'}}}}}}
+      responses: {'204': {description: Password reset and sessions revoked}, '401': {$ref: '#/components/responses/Error'}, '422': {$ref: '#/components/responses/Error'}}
   /api/v1/auth/password/change:
     post:
-      summary: Change the authenticated password
+      tags: [Authentication]
+      summary: Change the authenticated user's password
       security: [{bearerAuth: []}]
-      responses: {'204': {description: Changed}, '401': {$ref: '#/components/responses/Error'}}
-  /api/v1/auth/sessions:
-    get: {summary: List sessions, security: [{bearerAuth: []}], responses: {'200': {description: Sessions}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [current_password, new_password], properties: {current_password: {type: string}, new_password: {$ref: '#/components/schemas/Password'}}}}}}
+      responses: {'204': {description: Password changed and sessions revoked}, '401': {$ref: '#/components/responses/Error'}, '422': {$ref: '#/components/responses/Error'}}
   /api/v1/organizations/current:
-    get: {summary: Get current organization, security: [{bearerAuth: []}], responses: {'200': {description: Organization}}}
-    patch: {summary: Rename current organization, security: [{bearerAuth: []}], responses: {'200': {description: Updated}}}
+    get:
+      tags: [Organizations]
+      summary: Get the current organization and membership
+      security: [{bearerAuth: []}]
+      responses: {'200': {description: Current organization}, '401': {$ref: '#/components/responses/Error'}}
+    patch:
+      tags: [Organizations]
+      summary: Rename the current organization
+      security: [{bearerAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [name], properties: {name: {type: string}}}}}}
+      responses: {'200': {description: Updated organization}, '403': {$ref: '#/components/responses/Error'}}
   /api/v1/organizations/current/members:
-    get: {summary: List members, security: [{bearerAuth: []}], responses: {'200': {description: Members}}}
+    get:
+      tags: [Organizations]
+      summary: List organization members
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/Cursor'}, {$ref: '#/components/parameters/Limit'}]
+      responses: {'200': {description: Member page}, '401': {$ref: '#/components/responses/Error'}}
+  /api/v1/organizations/current/members/{memberId}:
+    patch:
+      tags: [Organizations]
+      summary: Change a member role or state
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/MemberId'}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {role: {$ref: '#/components/schemas/Role'}, state: {type: string, enum: [active, disabled]}}}}}}
+      responses: {'200': {description: Updated member}, '403': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}
+    delete:
+      tags: [Organizations]
+      summary: Remove a member
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/MemberId'}]
+      responses: {'204': {description: Member removed}, '403': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}
   /api/v1/organizations/current/invitations:
-    get: {summary: List invitations, security: [{bearerAuth: []}], responses: {'200': {description: Invitations}}}
-    post: {summary: Invite a member, security: [{bearerAuth: []}], responses: {'201': {description: Created}}}
+    get:
+      tags: [Organizations]
+      summary: List organization invitations
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/Cursor'}, {$ref: '#/components/parameters/Limit'}]
+      responses: {'200': {description: Invitation page}, '403': {$ref: '#/components/responses/Error'}}
+    post:
+      tags: [Organizations]
+      summary: Invite an organization member
+      security: [{bearerAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email, role], properties: {email: {type: string, format: email}, role: {$ref: '#/components/schemas/Role'}}}}}}
+      responses: {'201': {description: Invitation created}, '403': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}
+  /api/v1/organizations/current/invitations/{invitationId}:
+    delete:
+      tags: [Organizations]
+      summary: Revoke an invitation
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/InvitationId'}]
+      responses: {'204': {description: Invitation revoked}, '404': {$ref: '#/components/responses/Error'}}
+  /api/v1/invitations/{token}/accept:
+    post:
+      tags: [Organizations]
+      summary: Accept an invitation
+      parameters: [{$ref: '#/components/parameters/InvitationToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [display_name, password], properties: {display_name: {type: string}, password: {$ref: '#/components/schemas/Password'}}}}}}
+      responses: {'201': {description: Membership created}, '401': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}
   /api/v1/organizations/current/audit-events:
     get:
-      summary: List audit events
+      tags: [Organizations]
+      summary: List organization audit events (owner or admin)
       security: [{bearerAuth: []}]
-      parameters:
-        - {in: query, name: cursor, schema: {type: string}}
-        - {in: query, name: action, schema: {type: string}}
-        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100}}
-      responses: {'200': {description: Events}, '403': {$ref: '#/components/responses/Error'}}
+      parameters: [{$ref: '#/components/parameters/Cursor'}, {$ref: '#/components/parameters/Limit'}, {in: query, name: action, schema: {type: string}}]
+      responses: {'200': {description: Audit-event page}, '403': {$ref: '#/components/responses/Error'}}
   /health/live:
-    get: {summary: Liveness, responses: {'200': {description: Live}}}
+    get: {tags: [Operations], summary: Check process liveness, responses: {'200': {description: Live}}}
   /health/ready:
-    get: {summary: Readiness, responses: {'200': {description: Ready}, '503': {description: Unavailable}}}
+    get: {tags: [Operations], summary: Check MongoDB readiness, responses: {'200': {description: Ready}, '503': {description: Unavailable}}}
+  /metrics:
+    get: {tags: [Operations], summary: Return Prometheus metrics, responses: {'200': {description: Prometheus text exposition}}}
 components:
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    Cursor: {in: query, name: cursor, schema: {type: string}, description: Object ID cursor from the previous response}
+    Limit: {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100}}
+    SessionId: {in: path, name: sessionId, required: true, schema: {type: string}}
+    MemberId: {in: path, name: memberId, required: true, schema: {type: string}}
+    InvitationId: {in: path, name: invitationId, required: true, schema: {type: string}}
+    InvitationToken: {in: path, name: token, required: true, schema: {type: string}}
+  requestBodies:
+    Register:
+      required: true
+      content: {application/json: {schema: {$ref: '#/components/schemas/RegisterRequest'}}}
+    Login:
+      required: true
+      content: {application/json: {schema: {$ref: '#/components/schemas/LoginRequest'}}}
+    Refresh:
+      required: true
+      content: {application/json: {schema: {type: object, required: [refresh_token], properties: {refresh_token: {type: string}}}}}
   responses:
+    Auth:
+      description: Access and refresh credentials
+      headers: {Cache-Control: {schema: {type: string}, description: Always no-store}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/AuthResponse'}}}
     Error:
-      description: Stable JSON error envelope
+      description: Stable error envelope
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
+  schemas:
+    Password: {type: string, minLength: 12, maxLength: 72, writeOnly: true}
+    Role: {type: string, enum: [owner, admin, member]}
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [organization_name, organization_slug, email, display_name, password]
+      properties:
+        organization_name: {type: string}
+        organization_slug: {type: string, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'}
+        email: {type: string, format: email}
+        display_name: {type: string}
+        password: {$ref: '#/components/schemas/Password'}
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [organization_slug, email, password]
+      properties: {organization_slug: {type: string}, email: {type: string, format: email}, password: {type: string, writeOnly: true}}
+    Principal:
+      type: object
+      required: [user_id, organization_id, role, token_id]
+      properties: {user_id: {type: string}, organization_id: {type: string}, role: {$ref: '#/components/schemas/Role'}, token_id: {type: string}}
+    AuthResponse:
+      type: object
+      required: [access_token, token_type, expires_in, refresh_token, refresh_expires_in, user, organization, membership]
+      properties:
+        access_token: {type: string}
+        token_type: {type: string, const: Bearer}
+        expires_in: {type: integer}
+        refresh_token: {type: string}
+        refresh_expires_in: {type: integer}
+        user: {$ref: '#/components/schemas/User'}
+        organization: {$ref: '#/components/schemas/Organization'}
+        membership: {$ref: '#/components/schemas/Membership'}
+    User:
+      type: object
+      properties: {id: {type: string}, email: {type: string, format: email}, display_name: {type: string}, email_verified: {type: boolean}}
+    Organization:
+      type: object
+      properties: {id: {type: string}, name: {type: string}, slug: {type: string}}
+    Membership:
+      type: object
+      properties: {id: {type: string}, role: {$ref: '#/components/schemas/Role'}, state: {type: string, enum: [active, disabled]}}
+    Session:
+      type: object
+      properties: {id: {type: string}, ip_address: {type: string}, user_agent: {type: string}, expires_at: {type: string, format: date-time}, revoked_at: {type: string, format: date-time}, revocation_reason: {type: string}, created_at: {type: string, format: date-time}, last_used_at: {type: string, format: date-time}}
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties: {code: {type: string}, message: {type: string}, request_id: {type: string}}

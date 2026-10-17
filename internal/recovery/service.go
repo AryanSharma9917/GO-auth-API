@@ -60,7 +60,11 @@ func NewService(users Users, resets Resets, sessions Sessions, passwords Hasher,
 }
 
 func (s *Service) Request(ctx context.Context, email string) error {
-	user, err := s.users.ByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil
+	}
+	user, err := s.users.ByEmail(ctx, email)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	}
@@ -82,6 +86,9 @@ func (s *Service) Request(ctx context.Context, email string) error {
 }
 
 func (s *Service) Confirm(ctx context.Context, rawToken, newPassword string) error {
+	if strings.TrimSpace(rawToken) == "" {
+		return ErrInvalidToken
+	}
 	passwordHash, err := s.passwords.Hash(newPassword)
 	if errors.Is(err, password.ErrInvalidLength) {
 		return ErrInvalidInput
