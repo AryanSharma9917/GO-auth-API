@@ -3,19 +3,25 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"golang-auth/configs"
+	"golang-auth/internal/audit"
 	"golang-auth/internal/auth"
 	"golang-auth/internal/httpapi"
 	"golang-auth/internal/invitation"
 	"golang-auth/internal/mailer"
+	"golang-auth/internal/observability"
 	"golang-auth/internal/organization"
 	"golang-auth/internal/password"
+	"golang-auth/internal/recovery"
 	mongostore "golang-auth/internal/store/mongo"
 	"golang-auth/internal/token"
 
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
@@ -55,19 +61,51 @@ func New(cfg configs.Config) (*App, error) {
 	refreshManager := token.NewRefreshManager()
 	authService := auth.NewService(store.Users, store.Organizations, store.Memberships, store.Sessions, passwordHasher, tokenSigner, refreshManager, cfg.RefreshTokenTTL)
 	organizationService := organization.NewService(store.Users, store.Organizations, store.Memberships, store.Sessions)
-	developmentMailer, err := mailer.NewDevelopment(cfg.Environment, cfg.ApplicationBaseURL)
+	var sender interface {
+		mailer.Sender
+		recovery.Mailer
+	}
+	if cfg.Environment == "production" {
+		sender, err = mailer.NewSMTP(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPFrom, cfg.ApplicationBaseURL)
+	} else {
+		sender, err = mailer.NewDevelopment(cfg.Environment, cfg.ApplicationBaseURL)
+	}
 	if err != nil {
 		_ = client.Disconnect(ctx)
-		return nil, fmt.Errorf("configure invitation mailer: %w", err)
+		return nil, fmt.Errorf("configure mailer: %w", err)
 	}
-	invitationService := invitation.NewService(store.Users, store.Organizations, store.Memberships, store.Invitations, passwordHasher, refreshManager, developmentMailer, cfg.InvitationTokenTTL)
+	invitationService := invitation.NewService(store.Users, store.Organizations, store.Memberships, store.Invitations, passwordHasher, refreshManager, sender, cfg.InvitationTokenTTL)
+	auditService := audit.NewService(store.AuditEvents, store.Memberships)
+	recoveryService := recovery.NewService(store.Users, store.PasswordResets, store.Sessions, passwordHasher, refreshManager, sender, cfg.PasswordResetTTL)
 
 	server := echo.New()
 	server.HideBanner = true
+	server.IPExtractor = echo.ExtractIPDirect()
+	metrics := observability.NewMetrics()
+	server.Use(middleware.RequestID(), middleware.Recover(), middleware.BodyLimit(cfg.RequestBodyLimit))
+	server.Use(middleware.SecureWithConfig(middleware.SecureConfig{XFrameOptions: "DENY", ContentSecurityPolicy: "default-src 'none'; frame-ancestors 'none'", ReferrerPolicy: "no-referrer"}))
+	server.Use(middleware.CORSWithConfig(middleware.CORSConfig{AllowOrigins: splitCSV(cfg.CORSAllowedOrigins), AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodDelete, http.MethodOptions}, AllowHeaders: []string{echo.HeaderAuthorization, echo.HeaderContentType, echo.HeaderXRequestID}, ExposeHeaders: []string{echo.HeaderXRequestID}, MaxAge: 300}))
+	server.Use(metrics.Middleware)
+	server.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{LogRequestID: true, LogRemoteIP: true, LogMethod: true, LogRoutePath: true, LogStatus: true, LogLatency: true, LogError: true, LogValuesFunc: func(_ echo.Context, values middleware.RequestLoggerValues) error {
+		slog.Info("http request", "request_id", values.RequestID, "remote_ip", values.RemoteIP, "method", values.Method, "route", values.RoutePath, "status", values.Status, "latency_ms", values.Latency.Milliseconds(), "error", values.Error)
+		return nil
+	}}))
+	server.GET("/metrics", metrics.Handler)
 	registerHealthRoutes(server, client)
-	httpapi.NewHandler(authService, tokenSigner, cfg.AccessTokenTTL, organizationService).WithInvitationService(invitationService).RegisterRoutes(server)
+	httpapi.NewHandler(authService, tokenSigner, cfg.AccessTokenTTL, organizationService).WithInvitationService(invitationService).WithAuditService(auditService).WithRecoveryService(recoveryService).WithSensitiveRateLimit(cfg.SensitiveRateLimit).RegisterRoutes(server)
 
 	return &App{server: server, mongo: client}, nil
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 func (a *App) Start(address string) error {

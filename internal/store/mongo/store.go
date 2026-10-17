@@ -15,12 +15,13 @@ import (
 )
 
 const (
-	usersCollection         = "users"
-	organizationsCollection = "organizations"
-	membershipsCollection   = "memberships"
-	sessionsCollection      = "sessions"
-	invitationsCollection   = "invitations"
-	auditEventsCollection   = "audit_events"
+	usersCollection          = "users"
+	organizationsCollection  = "organizations"
+	membershipsCollection    = "memberships"
+	sessionsCollection       = "sessions"
+	invitationsCollection    = "invitations"
+	auditEventsCollection    = "audit_events"
+	passwordResetsCollection = "password_resets"
 )
 
 type Store struct {
@@ -32,6 +33,7 @@ type Store struct {
 	Sessions         *SessionRepository
 	Invitations      *InvitationRepository
 	AuditEvents      *AuditRepository
+	PasswordResets   *PasswordResetRepository
 }
 
 func New(client *mongo.Client, databaseName string, operationTimeout time.Duration) *Store {
@@ -45,6 +47,7 @@ func New(client *mongo.Client, databaseName string, operationTimeout time.Durati
 		Sessions:         &SessionRepository{collection: database.Collection(sessionsCollection), timeout: operationTimeout},
 		Invitations:      &InvitationRepository{collection: database.Collection(invitationsCollection), timeout: operationTimeout},
 		AuditEvents:      &AuditRepository{collection: database.Collection(auditEventsCollection), timeout: operationTimeout},
+		PasswordResets:   &PasswordResetRepository{collection: database.Collection(passwordResetsCollection), timeout: operationTimeout},
 	}
 }
 
@@ -88,6 +91,10 @@ func (s *Store) EnsureIndexes(ctx context.Context) error {
 		},
 		auditEventsCollection: {
 			{Keys: bson.D{{Key: "organizationId", Value: 1}, {Key: "createdAt", Value: -1}}, Options: options.Index().SetName("audit_events_organization_created")},
+		},
+		passwordResetsCollection: {
+			{Keys: bson.D{{Key: "tokenHash", Value: 1}}, Options: options.Index().SetUnique(true).SetName("password_resets_token_hash_unique")},
+			{Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0).SetName("password_resets_expiry_ttl")},
 		},
 	}
 
@@ -144,6 +151,19 @@ func (r *UserRepository) ByIDs(ctx context.Context, ids []bson.ObjectID) ([]doma
 
 func (r *UserRepository) Delete(ctx context.Context, id bson.ObjectID) error {
 	return deleteByID(ctx, r.collection, r.timeout, id, "user")
+}
+
+func (r *UserRepository) UpdatePassword(ctx context.Context, id bson.ObjectID, passwordHash string, updatedAt time.Time) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"passwordHash": passwordHash, "updatedAt": updatedAt}})
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	if result.MatchedCount != 1 {
+		return fmt.Errorf("update password: %w", basestore.ErrNotFound)
+	}
+	return nil
 }
 
 func (r *UserRepository) findOne(ctx context.Context, filter any) (domain.User, error) {
@@ -387,6 +407,44 @@ func (r *SessionRepository) RevokeAll(ctx context.Context, userID, organizationI
 	return nil
 }
 
+func (r *SessionRepository) RevokeAllForUser(ctx context.Context, userID bson.ObjectID, revokedAt time.Time, reason string) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	_, err := r.collection.UpdateMany(ctx, bson.M{"userId": userID, "revokedAt": bson.M{"$exists": false}}, bson.M{"$set": bson.M{"revokedAt": revokedAt, "revocationReason": reason}})
+	if err != nil {
+		return fmt.Errorf("revoke user sessions: %w", err)
+	}
+	return nil
+}
+
+type PasswordResetRepository struct {
+	collection *mongo.Collection
+	timeout    time.Duration
+}
+
+func (r *PasswordResetRepository) Create(ctx context.Context, reset domain.PasswordReset) (domain.PasswordReset, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	if reset.ID.IsZero() {
+		reset.ID = bson.NewObjectID()
+	}
+	if _, err := r.collection.InsertOne(ctx, reset); err != nil {
+		return domain.PasswordReset{}, repositoryError("insert password reset", err)
+	}
+	return reset, nil
+}
+
+func (r *PasswordResetRepository) Consume(ctx context.Context, tokenHash string, usedAt time.Time) (domain.PasswordReset, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{"tokenHash": tokenHash, "expiresAt": bson.M{"$gt": usedAt}, "usedAt": bson.M{"$exists": false}}
+	var reset domain.PasswordReset
+	if err := r.collection.FindOneAndUpdate(ctx, filter, bson.M{"$set": bson.M{"usedAt": usedAt}}, options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&reset); err != nil {
+		return reset, repositoryError("consume password reset", err)
+	}
+	return reset, nil
+}
+
 type InvitationRepository struct {
 	collection *mongo.Collection
 	timeout    time.Duration
@@ -518,6 +576,28 @@ func (r *AuditRepository) Create(ctx context.Context, event domain.AuditEvent) (
 	return event, nil
 }
 
+func (r *AuditRepository) ListForOrganization(ctx context.Context, organizationID, before bson.ObjectID, action string, limit int64) ([]domain.AuditEvent, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	filter := bson.M{"organizationId": organizationID}
+	if !before.IsZero() {
+		filter["_id"] = bson.M{"$lt": before}
+	}
+	if action != "" {
+		filter["action"] = action
+	}
+	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "_id", Value: -1}}).SetLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list audit events: %w", err)
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	var events []domain.AuditEvent
+	if err := cursor.All(ctx, &events); err != nil {
+		return nil, fmt.Errorf("decode audit events: %w", err)
+	}
+	return events, nil
+}
+
 func repositoryError(operation string, err error) error {
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return fmt.Errorf("%s: %w", operation, basestore.ErrNotFound)
@@ -542,10 +622,11 @@ func deleteByID(ctx context.Context, collection *mongo.Collection, timeout time.
 }
 
 var (
-	_ basestore.UserRepository         = (*UserRepository)(nil)
-	_ basestore.OrganizationRepository = (*OrganizationRepository)(nil)
-	_ basestore.MembershipRepository   = (*MembershipRepository)(nil)
-	_ basestore.SessionRepository      = (*SessionRepository)(nil)
-	_ basestore.InvitationRepository   = (*InvitationRepository)(nil)
-	_ basestore.AuditRepository        = (*AuditRepository)(nil)
+	_ basestore.UserRepository          = (*UserRepository)(nil)
+	_ basestore.OrganizationRepository  = (*OrganizationRepository)(nil)
+	_ basestore.MembershipRepository    = (*MembershipRepository)(nil)
+	_ basestore.SessionRepository       = (*SessionRepository)(nil)
+	_ basestore.InvitationRepository    = (*InvitationRepository)(nil)
+	_ basestore.AuditRepository         = (*AuditRepository)(nil)
+	_ basestore.PasswordResetRepository = (*PasswordResetRepository)(nil)
 )

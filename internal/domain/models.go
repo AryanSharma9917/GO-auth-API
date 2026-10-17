@@ -99,3 +99,12 @@ type AuditEvent struct {
 	Metadata       map[string]any `bson:"metadata,omitempty" json:"metadata,omitempty"`
 	CreatedAt      time.Time      `bson:"createdAt" json:"createdAt"`
 }
+
+type PasswordReset struct {
+	ID        bson.ObjectID `bson:"_id,omitempty" json:"id"`
+	UserID    bson.ObjectID `bson:"userId" json:"userId"`
+	TokenHash string        `bson:"tokenHash" json:"-"`
+	ExpiresAt time.Time     `bson:"expiresAt" json:"expiresAt"`
+	UsedAt    *time.Time    `bson:"usedAt,omitempty" json:"usedAt,omitempty"`
+	CreatedAt time.Time     `bson:"createdAt" json:"createdAt"`
+}
