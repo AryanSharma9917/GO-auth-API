@@ -33,7 +33,7 @@ go test -race ./...
 go vet ./...
 ```
 
-Protected requests use `Authorization: Bearer <access-token>`. The HTTP contract is in [openapi.yaml](openapi.yaml), and implementation and operating notes are in [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md).
+Protected requests use `Authorization: Bearer <access-token>`. Browse the [documentation website](https://aryansharma9917.github.io/GO-auth-API/), read the HTTP contract in [openapi.yaml](openapi.yaml), or use the detailed [implementation guide](IMPLEMENTATION_GUIDE.md).
 
 ## Operational endpoints
 
