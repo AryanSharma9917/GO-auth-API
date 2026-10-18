@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Documentation for GO Auth API — multi-tenant authentication, sessions, roles, invitations, recovery, and audit logs.">
+  <meta name="theme-color" content="#08111f">
+  <title>GO Auth API · Documentation</title>
+  <link rel="icon" href="./mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#overview" aria-label="GO Auth API documentation home">
+      <span class="brand-mark" aria-hidden="true">GA</span>
+      <span><strong>GO Auth API</strong><small>Documentation</small></span>
+    </a>
+    <div class="top-actions">
+      <button class="icon-button mobile-menu" id="menuButton" aria-label="Toggle navigation" aria-expanded="false">☰</button>
+      <button class="icon-button" id="themeButton" aria-label="Toggle color theme">◐</button>
+      <a class="github-link" href="https://github.com/AryanSharma9917/GO-auth-API" target="_blank" rel="noreferrer">GitHub ↗</a>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <label class="search-box">
+        <span aria-hidden="true">⌕</span>
+        <input id="searchInput" type="search" placeholder="Search documentation" aria-label="Search documentation">
+        <kbd>/</kbd>
+      </label>
+      <nav id="navigation" aria-label="Documentation sections">
+        <p class="nav-label">Introduction</p>
+        <a href="#overview">Overview</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#architecture">Architecture</a>
+        <p class="nav-label">Guides</p>
+        <a href="#authentication">Authentication</a>
+        <a href="#organizations">Organizations & roles</a>
+        <a href="#invitations">Invitations</a>
+        <a href="#passwords">Password recovery</a>
+        <a href="#audit">Audit trail</a>
+        <p class="nav-label">Reference</p>
+        <a href="#endpoints">API endpoints</a>
+        <a href="#configuration">Configuration</a>
+        <a href="#operations">Operations</a>
+        <a href="#security">Security</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+      </nav>
+      <div class="sidebar-card">
+        <span class="status-dot"></span>
+        <div><strong>Production-oriented</strong><small>Go · Echo · MongoDB</small></div>
+      </div>
+    </aside>
+
+    <main id="content">
+      <section class="hero searchable" id="overview" data-title="Overview">
+        <div class="eyebrow"><span></span> Identity infrastructure without the boilerplate</div>
+        <h1>Secure access for<br><em>multi-tenant products.</em></h1>
+        <p class="hero-copy">A focused Go API for authentication, organization membership, role-based access, session security, invitations, recovery, and audit history.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#quick-start">Start building <span>→</span></a>
+          <a class="button secondary" href="https://github.com/AryanSharma9917/GO-auth-API/blob/main/openapi.yaml">OpenAPI specification</a>
+        </div>
+        <div class="terminal" aria-label="Quick start terminal example">
+          <div class="terminal-bar"><span></span><span></span><span></span><small>terminal</small></div>
+          <pre><code><b>$</b> git clone https://github.com/AryanSharma9917/GO-auth-API.git
+<b>$</b> cd GO-auth-API && cp .env.example .env
+<b>$</b> docker compose up --build
+<i>✓ API ready at http://localhost:8080</i></code></pre>
+          <button class="copy" data-copy="git clone https://github.com/AryanSharma9917/GO-auth-API.git&#10;cd GO-auth-API && cp .env.example .env&#10;docker compose up --build">Copy</button>
+        </div>
+        <div class="capability-grid">
+          <article><span>01</span><h3>Token security</h3><p>Short-lived JWTs, rotating opaque refresh tokens, replay detection, and revocation.</p></article>
+          <article><span>02</span><h3>Tenant boundaries</h3><p>Organization-scoped memberships with owner, admin, and member authorization.</p></article>
+          <article><span>03</span><h3>Operational clarity</h3><p>Audit events, request IDs, structured logs, health checks, and Prometheus metrics.</p></article>
+        </div>
+      </section>
+
+      <section class="doc-section searchable" id="quick-start" data-title="Quick start local Docker setup">
+        <div class="section-kicker">01 · Getting started</div>
+        <h2>From clone to healthy in minutes</h2>
+        <p class="lead">Docker Compose starts both the API and MongoDB. No paid account or hosted service is required.</p>
+        <ol class="steps">
+          <li><div class="step-number">1</div><div><h3>Prepare configuration</h3><pre><code>cp .env.example .env</code></pre><p>For local development, the defaults are ready to use. Never reuse the example JWT secret in a public deployment.</p></div></li>
+          <li><div class="step-number">2</div><div><h3>Start the stack</h3><pre><code>docker compose up --build</code></pre><p>The API listens on port <code>8080</code> and MongoDB on <code>27017</code>.</p></div></li>
+          <li><div class="step-number">3</div><div><h3>Check readiness</h3><pre><code>curl http://localhost:8080/health/ready</code></pre><p>A ready service returns <code>{"status":"ready"}</code>.</p></div></li>
+        </ol>
+        <div class="callout"><strong>Development email</strong><p>Invitation and password-reset links are written to application logs. Production mode requires SMTP credentials and never logs these tokens.</p></div>
+      </section>
+
+      <section class="doc-section searchable" id="architecture" data-title="Architecture request flow MongoDB services">
+        <div class="section-kicker">02 · Design</div>
+        <h2>Small layers, explicit boundaries</h2>
+        <p class="lead">HTTP concerns, business rules, and persistence are separated so the security model stays understandable and testable.</p>
+        <div class="flow" aria-label="Architecture flow">
+          <div><small>01</small><strong>Client</strong><span>Bearer token + JSON</span></div><b>→</b>
+          <div><small>02</small><strong>Echo middleware</strong><span>Limits, IDs, headers</span></div><b>→</b>
+          <div><small>03</small><strong>Domain service</strong><span>Rules + authorization</span></div><b>→</b>
+          <div><small>04</small><strong>MongoDB</strong><span>Scoped repositories</span></div>
+        </div>
+        <div class="two-column">
+          <article class="detail-card"><h3>Request protection</h3><ul><li>Strict JSON decoding</li><li>Configurable body limits and CORS</li><li>Rate limits on sensitive routes</li><li>Safe, stable error envelopes</li></ul></article>
+          <article class="detail-card"><h3>Persistence guarantees</h3><ul><li>Unique identity and token indexes</li><li>TTL cleanup for expiring records</li><li>Hash-only opaque token storage</li><li>Request-scoped database timeouts</li></ul></article>
+        </div>
+      </section>
+
+      <section class="doc-section searchable" id="authentication" data-title="Authentication JWT access refresh login logout sessions">
+        <div class="section-kicker">03 · Authentication</div>
+        <h2>Access tokens stay short. Sessions stay controllable.</h2>
+        <p class="lead">Login returns a signed access token and an opaque refresh token. Refresh tokens rotate every time they are used.</p>
+        <div class="sequence">
+          <div><span>1</span><strong>Login</strong><p>Credentials are checked against bcrypt and the active organization membership.</p></div>
+          <div><span>2</span><strong>Issue</strong><p>A JWT and a random refresh token are returned. Only the refresh-token hash is stored.</p></div>
+          <div><span>3</span><strong>Rotate</strong><p>Every refresh replaces the current token. Reuse of an old token revokes the session.</p></div>
+          <div><span>4</span><strong>Revoke</strong><p>Users can end one session or all sessions for the organization.</p></div>
+        </div>
+        <h3>Authenticated request</h3>
+        <pre><code>curl http://localhost:8080/api/v1/auth/me \
+  -H "Authorization: Bearer $ACCESS_TOKEN"</code></pre>
+      </section>
+
+      <section class="doc-section searchable" id="organizations" data-title="Organizations roles owner admin member permissions">
+        <div class="section-kicker">04 · Authorization</div>
+        <h2>Roles with tenant-safe boundaries</h2>
+        <div class="table-wrap"><table><thead><tr><th>Capability</th><th>Owner</th><th>Admin</th><th>Member</th></tr></thead><tbody>
+          <tr><td>View organization</td><td>✓</td><td>✓</td><td>✓</td></tr>
+          <tr><td>List members</td><td>✓</td><td>✓</td><td>✓</td></tr>
+          <tr><td>Manage members</td><td>✓</td><td>Limited</td><td>—</td></tr>
+          <tr><td>Invite admins</td><td>✓</td><td>—</td><td>—</td></tr>
+          <tr><td>View audit events</td><td>✓</td><td>✓</td><td>—</td></tr>
+        </tbody></table></div>
+        <p>The service blocks removal or demotion of the final active owner. Caller identity and organization scope always come from validated access-token claims.</p>
+      </section>
+
+      <section class="doc-section searchable" id="invitations" data-title="Invitations team member email token acceptance">
+        <div class="section-kicker">05 · Team onboarding</div>
+        <h2>Single-use invitations</h2>
+        <p class="lead">Owners and admins can invite members without sharing credentials or pre-creating passwords.</p>
+        <div class="callout accent"><strong>Token handling</strong><p>Invitation tokens are random, stored only as hashes, expire automatically, and can be accepted only once.</p></div>
+        <pre><code>curl -X POST http://localhost:8080/api/v1/organizations/current/invitations \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"teammate@example.com","role":"member"}'</code></pre>
+      </section>
+
+      <section class="doc-section searchable" id="passwords" data-title="Password reset recovery change SMTP">
+        <div class="section-kicker">06 · Account recovery</div>
+        <h2>Recovery without account discovery</h2>
+        <p>Password-reset requests always return the same accepted response, whether the email exists or not. Reset tokens are hash-only, expiring, and single-use. A successful reset revokes all sessions for that user.</p>
+        <div class="endpoint-mini"><span>POST</span><code>/api/v1/auth/password/reset-request</code></div>
+        <div class="endpoint-mini"><span>POST</span><code>/api/v1/auth/password/reset-confirm</code></div>
+        <div class="endpoint-mini protected"><span>POST</span><code>/api/v1/auth/password/change</code><small>Bearer token</small></div>
+      </section>
+
+      <section class="doc-section searchable" id="audit" data-title="Audit logs events security history filtering pagination">
+        <div class="section-kicker">07 · Accountability</div>
+        <h2>A security history that avoids secrets</h2>
+        <p class="lead">Sensitive actions create organization-scoped events that owners and admins can filter and paginate.</p>
+        <div class="event-example"><div><span class="event-icon">↳</span><strong>membership.updated</strong><small>2026-10-19 · owner</small></div><code>{ "role": "admin", "state": "active" }</code></div>
+        <p>Audit metadata uses an explicit allowlist. Passwords, raw tokens, authorization headers, and secrets are never accepted as metadata.</p>
+      </section>
+
+      <section class="doc-section searchable" id="endpoints" data-title="API endpoint reference routes HTTP">
+        <div class="section-kicker">08 · API reference</div>
+        <h2>Endpoint map</h2>
+        <div class="endpoint-list">
+          <div><span class="post">POST</span><code>/api/v1/organizations/register</code><p>Create an organization and owner</p></div>
+          <div><span class="post">POST</span><code>/api/v1/auth/login</code><p>Authenticate a member</p></div>
+          <div><span class="post">POST</span><code>/api/v1/auth/refresh</code><p>Rotate refresh credentials</p></div>
+          <div><span class="post">POST</span><code>/api/v1/auth/logout</code><p>Revoke one session</p></div>
+          <div><span class="get">GET</span><code>/api/v1/auth/sessions</code><p>List active and revoked sessions</p></div>
+          <div><span class="delete">DELETE</span><code>/api/v1/auth/sessions/{sessionId}</code><p>Revoke a selected session</p></div>
+          <div><span class="get">GET</span><code>/api/v1/organizations/current/members</code><p>List organization members</p></div>
+          <div><span class="patch">PATCH</span><code>/api/v1/organizations/current/members/{memberId}</code><p>Update role or state</p></div>
+          <div><span class="post">POST</span><code>/api/v1/organizations/current/invitations</code><p>Invite a member</p></div>
+          <div><span class="get">GET</span><code>/api/v1/organizations/current/audit-events</code><p>Review security history</p></div>
+        </div>
+        <p class="reference-link">For every route, schema, parameter, and response, use the <a href="https://github.com/AryanSharma9917/GO-auth-API/blob/main/openapi.yaml">OpenAPI 3.1 specification →</a></p>
+      </section>
+
+      <section class="doc-section searchable" id="configuration" data-title="Configuration environment variables env settings">
+        <div class="section-kicker">09 · Configuration</div>
+        <h2>Environment-only configuration</h2>
+        <div class="table-wrap"><table><thead><tr><th>Variable</th><th>Purpose</th><th>Default</th></tr></thead><tbody>
+          <tr><td><code>MONGODB_URI</code></td><td>MongoDB connection string</td><td>Required</td></tr>
+          <tr><td><code>JWT_SECRET</code></td><td>Access-token signing secret</td><td>Required, ≥32 chars</td></tr>
+          <tr><td><code>ACCESS_TOKEN_TTL</code></td><td>Access-token lifetime</td><td>15m</td></tr>
+          <tr><td><code>REFRESH_TOKEN_TTL</code></td><td>Refresh-session lifetime</td><td>720h</td></tr>
+          <tr><td><code>CORS_ALLOWED_ORIGINS</code></td><td>Browser origin allowlist</td><td>localhost:3000</td></tr>
+          <tr><td><code>SENSITIVE_RATE_LIMIT</code></td><td>Requests per second per client</td><td>5</td></tr>
+          <tr><td><code>SMTP_HOST</code></td><td>Production email relay</td><td>Required in production</td></tr>
+        </tbody></table></div>
+        <p>See <a href="https://github.com/AryanSharma9917/GO-auth-API/blob/main/.env.example"><code>.env.example</code></a> for the complete configuration reference.</p>
+      </section>
+
+      <section class="doc-section searchable" id="operations" data-title="Operations health readiness metrics Docker deployment">
+        <div class="section-kicker">10 · Operations</div>
+        <h2>Built to be observed</h2>
+        <div class="three-column">
+          <article class="detail-card"><span class="metric">200</span><h3><code>/health/live</code></h3><p>Confirms that the API process is alive.</p></article>
+          <article class="detail-card"><span class="metric">DB</span><h3><code>/health/ready</code></h3><p>Checks whether MongoDB is reachable.</p></article>
+          <article class="detail-card"><span class="metric">Σ</span><h3><code>/metrics</code></h3><p>Exposes Prometheus-compatible request metrics.</p></article>
+        </div>
+        <h3>Production image</h3><pre><code>docker build -t go-auth-api .
+docker compose -f compose.production.yaml up -d</code></pre>
+        <p>The multi-stage image contains only the compiled binary and runs as a non-root user with a read-only filesystem in the production Compose definition.</p>
+      </section>
+
+      <section class="doc-section searchable" id="security" data-title="Security model secrets tokens bcrypt CORS headers">
+        <div class="section-kicker">11 · Security</div>
+        <h2>Baseline protections</h2>
+        <div class="check-grid">
+          <div>✓ Explicit JWT issuer and audience</div><div>✓ Refresh-token replay detection</div>
+          <div>✓ Bcrypt password hashing</div><div>✓ Hash-only opaque token storage</div>
+          <div>✓ Secure HTTP headers</div><div>✓ Strict JSON decoding</div>
+          <div>✓ Tenant-scoped authorization</div><div>✓ Safe audit metadata allowlist</div>
+        </div>
+        <div class="callout warning"><strong>Before public production use</strong><p>Use TLS, managed secrets, authenticated MongoDB, protected metrics, tested backups, and distributed rate limiting when running multiple instances.</p></div>
+      </section>
+
+      <section class="doc-section searchable" id="troubleshooting" data-title="Troubleshooting errors Docker MongoDB SMTP JWT">
+        <div class="section-kicker">12 · Troubleshooting</div>
+        <h2>Common setup issues</h2>
+        <details><summary>The readiness endpoint returns 503</summary><p>Check that the MongoDB container is healthy and that <code>MONGODB_URI</code> points to the correct host. Inside Compose, use <code>mongo</code>, not <code>localhost</code>.</p></details>
+        <details><summary>The application rejects the JWT secret</summary><p><code>JWT_SECRET</code> must contain at least 32 characters. Use a randomly generated secret outside local development.</p></details>
+        <details><summary>Production mode will not start</summary><p>Production intentionally requires complete SMTP settings: host, port, username, password, and sender address.</p></details>
+        <details><summary>Invitation or reset email did not arrive locally</summary><p>The development mailer does not send external email. Inspect <code>docker compose logs api</code> for the generated URL.</p></details>
+      </section>
+
+      <section class="closing">
+        <span class="brand-mark large">GA</span><h2>Build the product,<br>not another auth layer.</h2>
+        <p>Clone the API, run it locally, and explore the complete contract.</p>
+        <div class="hero-actions"><a class="button primary" href="https://github.com/AryanSharma9917/GO-auth-API">View repository →</a><a class="button secondary" href="#quick-start">Quick start</a></div>
+      </section>
+      <footer><span>GO Auth API</span><span>Built with Go, Echo, and MongoDB · Apache-2.0</span></footer>
+    </main>
+
+    <aside class="toc"><p>On this page</p><a href="#overview">Overview</a><a href="#quick-start">Quick start</a><a href="#architecture">Architecture</a><a href="#authentication">Authentication</a><a href="#endpoints">Endpoints</a><a href="#security">Security</a><a href="#troubleshooting">Troubleshooting</a></aside>
+  </div>
+  <div class="search-empty" id="searchEmpty" hidden>No matching documentation found.</div>
+  <script src="./app.js"></script>
+</body>
+</html>
